@@ -77,7 +77,7 @@ func leaseTestRequest() (clipexec.Request, clipexec.Options) {
 	}, clipexec.Options{SourceFormat: sdktranslator.FormatOpenAI}
 }
 
-func requireReturnedPoolToken(t *testing.T, pool *captcha.Pool, extracts *atomic.Int32, want string) {
+func requireReturnedPoolToken(t *testing.T, pool *captcha.Pool, extracts *atomic.Int32) {
 	t.Helper()
 
 	if got := extracts.Load(); got != 1 {
@@ -89,8 +89,8 @@ func requireReturnedPoolToken(t *testing.T, pool *captcha.Pool, extracts *atomic
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
-		t.Fatalf("returned token=%q want %q", got, want)
+	if got != "tok-1" {
+		t.Fatalf("returned token=%q want tok-1", got)
 	}
 }
 
@@ -345,7 +345,7 @@ func TestExecutePoolLease_InflightRejectedReturnsToken(t *testing.T) {
 	if transportHits.Load() != 0 {
 		t.Fatalf("transport hits=%d want 0", transportHits.Load())
 	}
-	requireReturnedPoolToken(t, pool, extracts, "tok-1")
+	requireReturnedPoolToken(t, pool, extracts)
 }
 
 func TestExecutePoolLease_InflightCanceledReturnsToken(t *testing.T) {
@@ -395,7 +395,7 @@ func TestExecutePoolLease_InflightCanceledReturnsToken(t *testing.T) {
 	if transportHits.Load() != 0 {
 		t.Fatalf("transport hits=%d want 0", transportHits.Load())
 	}
-	requireReturnedPoolToken(t, pool, extracts, "tok-1")
+	requireReturnedPoolToken(t, pool, extracts)
 }
 
 func TestExecutePoolLease_ContextCanceledBeforeDoReturnsToken(t *testing.T) {
@@ -438,7 +438,7 @@ func TestExecutePoolLease_ContextCanceledBeforeDoReturnsToken(t *testing.T) {
 	if transportHits.Load() != 0 {
 		t.Fatalf("transport hits=%d want 0", transportHits.Load())
 	}
-	requireReturnedPoolToken(t, pool, extracts, "tok-1")
+	requireReturnedPoolToken(t, pool, extracts)
 }
 
 func TestExecutePoolLease_ExpiredWhileWaitingInflightSendsOnlyFreshToken(t *testing.T) {
@@ -521,7 +521,7 @@ func TestExecutePoolLease_InvalidRequestReturnsToken(t *testing.T) {
 	if transportHits.Load() != 0 {
 		t.Fatalf("transport hits=%d want 0", transportHits.Load())
 	}
-	requireReturnedPoolToken(t, pool, extracts, "tok-1")
+	requireReturnedPoolToken(t, pool, extracts)
 }
 
 func TestExecutePoolLease_TransportErrorCommitsToken(t *testing.T) {
@@ -574,11 +574,15 @@ func TestExecutePoolLease_RetryableCaptchaUsesFreshToken(t *testing.T) {
 		received <- token
 		if token == "bad" {
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"requestStatus":{"statusCode":"INVALID_REQUEST","statusDescription":"Token is invalid","requestId":"x"}}`))
+			if _, err := w.Write([]byte(`{"requestStatus":{"statusCode":"INVALID_REQUEST","statusDescription":"Token is invalid","requestId":"x"}}`)); err != nil {
+				t.Errorf("write bad-token body: %v", err)
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		if _, err := w.Write([]byte(`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"}}]}`)); err != nil {
+			t.Errorf("write success body: %v", err)
+		}
 	}))
 	defer upstream.Close()
 	executor := NewExecutor(Options{

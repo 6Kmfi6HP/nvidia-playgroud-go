@@ -439,7 +439,8 @@ func (e *Executor) resolveCaptcha(ctx context.Context, clientToken string, allow
 			}
 			return "", nil, err
 		}
-		return lease.Token(), lease, nil
+		token := lease.Token()
+		return token, lease, nil
 	}
 	if e.auto {
 		token, err := captcha.Extract(ctx)
