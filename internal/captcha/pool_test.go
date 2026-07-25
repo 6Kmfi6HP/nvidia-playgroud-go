@@ -284,7 +284,7 @@ func TestPoolTakeAfterCloseDoesNotConsumeReadyToken(t *testing.T) {
 }
 
 func TestPoolTokenLease_ReleaseRestoresEntry(t *testing.T) {
-	p := newStaticPool(
+	p := newStaticPool(t,
 		entry{token: "oldest", at: time.Now().Add(-time.Second)},
 		entry{token: "newest", at: time.Now()},
 	)
@@ -416,7 +416,7 @@ func TestPoolTokenLease_FinalizeOnce(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := newStaticPool(entry{token: "token", at: time.Now()})
+			p := newStaticPool(t, entry{token: "token", at: time.Now()})
 			lease, err := p.TakeLease(context.Background())
 			if err != nil {
 				t.Fatalf("TakeLease: %v", err)
@@ -443,7 +443,7 @@ func TestPoolTokenLease_FinalizeOnce(t *testing.T) {
 }
 
 func TestPoolTokenLease_ExpiredReleaseIsDiscarded(t *testing.T) {
-	p := newStaticPool(entry{token: "token", at: time.Now()})
+	p := newStaticPool(t, entry{token: "token", at: time.Now()})
 	lease, err := p.TakeLease(context.Background())
 	if err != nil {
 		t.Fatalf("TakeLease: %v", err)
@@ -466,7 +466,7 @@ func TestPoolTokenLease_ExpiredReleaseIsDiscarded(t *testing.T) {
 }
 
 func TestPoolTokenLease_CommitRejectsTokenExpiredWhileLeased(t *testing.T) {
-	p := newStaticPool(entry{token: "expired", at: time.Now()})
+	p := newStaticPool(t, entry{token: "expired", at: time.Now()})
 	lease, err := p.TakeLease(context.Background())
 	if err != nil {
 		t.Fatalf("TakeLease: %v", err)
@@ -488,7 +488,7 @@ func TestPoolTokenLease_CommitRejectsTokenExpiredWhileLeased(t *testing.T) {
 
 func TestPoolTokenLease_ReleaseRestoresEqualTimestampFIFO(t *testing.T) {
 	at := time.Now()
-	p := newStaticPool(
+	p := newStaticPool(t,
 		entry{token: "first", at: at},
 		entry{token: "second", at: at},
 	)
@@ -518,7 +518,7 @@ func TestPoolTokenLease_ReleaseRestoresEqualTimestampFIFO(t *testing.T) {
 }
 
 func TestPoolTokenLease_ReleaseAfterCloseIsDiscarded(t *testing.T) {
-	p := newStaticPool(entry{token: "token", at: time.Now()})
+	p := newStaticPool(t, entry{token: "token", at: time.Now()})
 	lease, err := p.TakeLease(context.Background())
 	if err != nil {
 		t.Fatalf("TakeLease: %v", err)
@@ -539,8 +539,10 @@ func TestPoolTokenLease_ReleaseAfterCloseIsDiscarded(t *testing.T) {
 	}
 }
 
-func newStaticPool(entries ...entry) *Pool {
+func newStaticPool(t *testing.T, entries ...entry) *Pool {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	for i := range entries {
 		entries[i].order = uint64(i)
 	}
