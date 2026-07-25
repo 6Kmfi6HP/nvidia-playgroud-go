@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"glm52-nvidia/internal/captcha"
 	"glm52-nvidia/internal/models"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -18,6 +22,77 @@ import (
 
 	_ "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator/builtin"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func newExecutorLeasePool(t *testing.T, tokens ...string) (*captcha.Pool, *atomic.Int32) {
+	t.Helper()
+	return newExecutorLeasePoolWithTTL(t, time.Minute, tokens...)
+}
+
+func newExecutorLeasePoolWithTTL(t *testing.T, ttl time.Duration, tokens ...string) (*captcha.Pool, *atomic.Int32) {
+	t.Helper()
+
+	var extracts atomic.Int32
+	pool := captcha.NewPool(t.Context(), func(ctx context.Context) (string, error) {
+		i := int(extracts.Load())
+		if i < len(tokens) {
+			extracts.Add(1)
+			return tokens[i], nil
+		}
+		<-ctx.Done()
+		return "", ctx.Err()
+	}, captcha.PoolConfig{Size: 1, Workers: 1, TTL: ttl})
+	t.Cleanup(pool.Close)
+	takeCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	lease, err := pool.TakeLease(takeCtx)
+	if err != nil {
+		t.Fatalf("wait for captcha pool: %v", err)
+	}
+	lease.Release()
+	return pool, &extracts
+}
+
+func receiveTestValue[T any](t *testing.T, ch <-chan T, name string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", name)
+		var zero T
+		return zero
+	}
+}
+
+func leaseTestRequest() (clipexec.Request, clipexec.Options) {
+	return clipexec.Request{
+		Model:   "z-ai/glm-5.2",
+		Payload: []byte(`{"model":"z-ai/glm-5.2","messages":[{"role":"user","content":"hi"}]}`),
+	}, clipexec.Options{SourceFormat: sdktranslator.FormatOpenAI}
+}
+
+func requireReturnedPoolToken(t *testing.T, pool *captcha.Pool, extracts *atomic.Int32) {
+	t.Helper()
+
+	if got := extracts.Load(); got != 1 {
+		t.Fatalf("extract calls=%d want 1", got)
+	}
+	takeCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	got, err := pool.Take(takeCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "tok-1" {
+		t.Fatalf("returned token=%q want tok-1", got)
+	}
+}
 
 func TestIsRetryableCaptchaFailure(t *testing.T) {
 	cases := []struct {
@@ -237,6 +312,302 @@ func TestUpstreamRetryOnInvalidToken(t *testing.T) {
 	raw, _ := io.ReadAll(upResp.Body)
 	if !strings.Contains(string(raw), "ok") {
 		t.Fatalf("body=%q", raw)
+	}
+}
+
+func TestExecutePoolLease_InflightRejectedReturnsToken(t *testing.T) {
+	pool, extracts := newExecutorLeasePool(t, "tok-1")
+	var transportHits atomic.Int32
+	executor := NewExecutor(Options{
+		Pool:        pool,
+		MaxInflight: 1,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			transportHits.Add(1)
+			return nil, errors.New("unexpected transport call")
+		})},
+	})
+	release, err := executor.acquireInflight(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	req, opts := leaseTestRequest()
+
+	_, err = executor.Execute(t.Context(), nil, req, opts)
+
+	var authErr *coreauth.Error
+	if !errors.As(err, &authErr) {
+		t.Fatalf("error type=%T want *coreauth.Error", err)
+	}
+	if authErr.HTTPStatus != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want %d", authErr.HTTPStatus, http.StatusServiceUnavailable)
+	}
+	if transportHits.Load() != 0 {
+		t.Fatalf("transport hits=%d want 0", transportHits.Load())
+	}
+	requireReturnedPoolToken(t, pool, extracts)
+}
+
+func TestExecutePoolLease_InflightCanceledReturnsToken(t *testing.T) {
+	pool, extracts := newExecutorLeasePool(t, "tok-1")
+	var transportHits atomic.Int32
+	executor := NewExecutor(Options{
+		Pool:         pool,
+		MaxInflight:  1,
+		InflightWait: time.Minute,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			transportHits.Add(1)
+			return nil, errors.New("unexpected transport call")
+		})},
+	})
+	releaseInflight, err := executor.acquireInflight(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseInflight()
+	waiting := make(chan struct{})
+	resume := make(chan struct{})
+	executor.beforeInflightWait = func() {
+		close(waiting)
+		receiveTestValue(t, resume, "resume inflight cancellation")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	req, opts := leaseTestRequest()
+	errCh := make(chan error, 1)
+	go func() {
+		_, executeErr := executor.Execute(ctx, nil, req, opts)
+		errCh <- executeErr
+	}()
+
+	receiveTestValue(t, waiting, "inflight wait barrier")
+	cancel()
+	close(resume)
+	err = receiveTestValue(t, errCh, "inflight cancellation result")
+
+	var authErr *coreauth.Error
+	if !errors.As(err, &authErr) {
+		t.Fatalf("error type=%T want *coreauth.Error", err)
+	}
+	if authErr.HTTPStatus != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want %d", authErr.HTTPStatus, http.StatusServiceUnavailable)
+	}
+	if transportHits.Load() != 0 {
+		t.Fatalf("transport hits=%d want 0", transportHits.Load())
+	}
+	requireReturnedPoolToken(t, pool, extracts)
+}
+
+func TestExecutePoolLease_ContextCanceledBeforeDoReturnsToken(t *testing.T) {
+	pool, extracts := newExecutorLeasePool(t, "tok-1")
+	var transportHits atomic.Int32
+	executor := NewExecutor(Options{
+		Pool: pool,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			transportHits.Add(1)
+			return nil, errors.New("unexpected transport call")
+		})},
+	})
+	requestReady := make(chan struct{})
+	resume := make(chan struct{})
+	executor.beforeSend = func() {
+		close(requestReady)
+		receiveTestValue(t, resume, "resume pre-Do cancellation")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	req, opts := leaseTestRequest()
+	errCh := make(chan error, 1)
+	go func() {
+		_, executeErr := executor.Execute(ctx, nil, req, opts)
+		errCh <- executeErr
+	}()
+
+	receiveTestValue(t, requestReady, "request ready barrier")
+	cancel()
+	close(resume)
+	err := receiveTestValue(t, errCh, "pre-Do cancellation result")
+
+	var authErr *coreauth.Error
+	if !errors.As(err, &authErr) {
+		t.Fatalf("error type=%T want *coreauth.Error", err)
+	}
+	if authErr.HTTPStatus != http.StatusRequestTimeout {
+		t.Fatalf("status=%d want %d", authErr.HTTPStatus, http.StatusRequestTimeout)
+	}
+	if transportHits.Load() != 0 {
+		t.Fatalf("transport hits=%d want 0", transportHits.Load())
+	}
+	requireReturnedPoolToken(t, pool, extracts)
+}
+
+func TestExecutePoolLease_ExpiredWhileWaitingInflightSendsOnlyFreshToken(t *testing.T) {
+	const ttl = 100 * time.Millisecond
+	pool, extracts := newExecutorLeasePoolWithTTL(t, ttl, "tok-1", "tok-2")
+	sentTokens := make(chan string, 2)
+	executor := NewExecutor(Options{
+		Pool:         pool,
+		MaxInflight:  1,
+		InflightWait: 5 * time.Second,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			sentTokens <- req.Header.Get("nv-captcha-token")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(
+					`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"}}]}`,
+				)),
+			}, nil
+		})},
+	})
+	releaseInflight, err := executor.acquireInflight(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan struct{})
+	resume := make(chan struct{})
+	var waits atomic.Int32
+	executor.beforeInflightWait = func() {
+		if waits.Add(1) != 1 {
+			return
+		}
+		close(waiting)
+		receiveTestValue(t, resume, "resume expired lease execution")
+	}
+	req, opts := leaseTestRequest()
+	errCh := make(chan error, 1)
+	go func() {
+		_, executeErr := executor.Execute(t.Context(), nil, req, opts)
+		errCh <- executeErr
+	}()
+
+	receiveTestValue(t, waiting, "first token inflight wait barrier")
+	receiveTestValue(t, time.After(5*ttl), "first lease TTL expiry")
+	releaseInflight()
+	close(resume)
+	if executeErr := receiveTestValue(t, errCh, "fresh token execution result"); executeErr != nil {
+		t.Fatal(executeErr)
+	}
+
+	if got := receiveTestValue(t, sentTokens, "upstream captcha token"); got != "tok-2" {
+		t.Fatalf("sent token=%q want tok-2", got)
+	}
+	if got := len(sentTokens); got != 0 {
+		t.Fatalf("additional upstream calls=%d want 0", got)
+	}
+	if got := extracts.Load(); got != 2 {
+		t.Fatalf("successful extracts=%d want 2", got)
+	}
+}
+
+func TestExecutePoolLease_InvalidRequestReturnsToken(t *testing.T) {
+	pool, extracts := newExecutorLeasePool(t, "tok-1")
+	var transportHits atomic.Int32
+	executor := NewExecutor(Options{
+		Pool: pool,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			transportHits.Add(1)
+			return nil, errors.New("unexpected transport call")
+		})},
+		PredictURL: func(models.ModelInfo) string { return ":" },
+	})
+	req, opts := leaseTestRequest()
+
+	_, err := executor.Execute(t.Context(), nil, req, opts)
+
+	if err == nil {
+		t.Fatal("expected request construction error")
+	}
+	if transportHits.Load() != 0 {
+		t.Fatalf("transport hits=%d want 0", transportHits.Load())
+	}
+	requireReturnedPoolToken(t, pool, extracts)
+}
+
+func TestExecutePoolLease_TransportErrorCommitsToken(t *testing.T) {
+	pool, extracts := newExecutorLeasePool(t, "tok-1", "tok-2")
+	sentinel := errors.New("sentinel transport error")
+	var transportHits atomic.Int32
+	executor := NewExecutor(Options{
+		Pool: pool,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			transportHits.Add(1)
+			if got := req.Header.Get("nv-captcha-token"); got != "tok-1" {
+				t.Errorf("sent token=%q want tok-1", got)
+			}
+			return nil, sentinel
+		})},
+	})
+	req, opts := leaseTestRequest()
+
+	_, err := executor.Execute(t.Context(), nil, req, opts)
+
+	var authErr *coreauth.Error
+	if !errors.As(err, &authErr) {
+		t.Fatalf("error type=%T want *coreauth.Error", err)
+	}
+	if authErr.HTTPStatus != http.StatusBadGateway {
+		t.Fatalf("status=%d want %d", authErr.HTTPStatus, http.StatusBadGateway)
+	}
+	takeCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	token, err := pool.Take(takeCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "tok-2" {
+		t.Fatalf("next token=%q want tok-2", token)
+	}
+	if got := extracts.Load(); got != 2 {
+		t.Fatalf("extract calls=%d want 2", got)
+	}
+	if transportHits.Load() != 1 {
+		t.Fatalf("transport hits=%d want 1", transportHits.Load())
+	}
+}
+
+func TestExecutePoolLease_RetryableCaptchaUsesFreshToken(t *testing.T) {
+	pool, _ := newExecutorLeasePool(t, "bad", "good")
+	received := make(chan string, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		token := req.Header.Get("nv-captcha-token")
+		received <- token
+		if token == "bad" {
+			w.WriteHeader(http.StatusBadRequest)
+			if _, err := w.Write([]byte(`{"requestStatus":{"statusCode":"INVALID_REQUEST","statusDescription":"Token is invalid","requestId":"x"}}`)); err != nil {
+				t.Errorf("write bad-token body: %v", err)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"}}]}`)); err != nil {
+			t.Errorf("write success body: %v", err)
+		}
+	}))
+	defer upstream.Close()
+	executor := NewExecutor(Options{
+		Pool:       pool,
+		HTTPClient: upstream.Client(),
+		PredictURL: func(models.ModelInfo) string { return upstream.URL },
+	})
+	req, opts := leaseTestRequest()
+
+	resp, err := executor.Execute(t.Context(), nil, req, opts)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(resp.Payload), "ok") {
+		t.Fatalf("payload=%s", resp.Payload)
+	}
+	got := []string{<-received, <-received}
+	if got[0] != "bad" || got[1] != "good" {
+		t.Fatalf("upstream tokens=%q want [bad good]", got)
+	}
+	select {
+	case token := <-received:
+		t.Fatalf("unexpected third upstream token %q", token)
+	default:
 	}
 }
 

@@ -27,6 +27,38 @@ type ExtractFunc func(ctx context.Context) (string, error)
 type entry struct {
 	token string
 	at    time.Time
+	order uint64
+}
+
+// TokenLease holds a pooled token until the caller knows whether it was sent.
+// A lease can be finalized once: Commit consumes the token, while Release
+// returns a still-valid token to its original FIFO position.
+type TokenLease struct {
+	pool  *Pool
+	entry entry
+	once  sync.Once
+	used  bool
+}
+
+// Token returns the leased one-shot token.
+func (l *TokenLease) Token() string {
+	return l.entry.token
+}
+
+// Commit consumes a token only if it is still fresh at the commit boundary.
+func (l *TokenLease) Commit() bool {
+	l.once.Do(func() {
+		l.used = l.pool.finalizeLease(l.entry, false)
+	})
+	return l.used
+}
+
+// Release returns the token to the pool if it is still open and the original
+// token timestamp is still within TTL.
+func (l *TokenLease) Release() {
+	l.once.Do(func() {
+		l.pool.finalizeLease(l.entry, true)
+	})
 }
 
 // Pool pre-warms one-shot captcha tokens so request handlers can Take without
@@ -45,10 +77,12 @@ type Pool struct {
 	size    int
 	ttl     time.Duration
 
-	mu       sync.Mutex
-	tokens   []entry
-	reserved int           // workers currently minting for an available slot
-	changed  chan struct{} // closed/replaced whenever queue capacity or data changes
+	mu        sync.Mutex
+	tokens    []entry
+	reserved  int // workers currently minting for an available slot
+	leased    int // tokens held by callers but still occupying capacity
+	nextOrder uint64
+	changed   chan struct{} // closed/replaced whenever queue capacity or data changes
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -147,7 +181,7 @@ func (p *Pool) reserveSlot() bool {
 			p.mu.Unlock()
 			return false
 		}
-		if len(p.tokens)+p.reserved < p.size {
+		if len(p.tokens)+p.reserved+p.leased < p.size {
 			p.reserved++
 			p.mu.Unlock()
 			return true
@@ -177,7 +211,8 @@ func (p *Pool) enqueue(token string) bool {
 		p.notifyLocked()
 		return false
 	}
-	p.tokens = append(p.tokens, entry{token: token, at: time.Now()})
+	p.tokens = append(p.tokens, entry{token: token, at: time.Now(), order: p.nextOrder})
+	p.nextOrder++
 	p.fills.Add(1)
 	p.notifyLocked()
 	return true
@@ -260,42 +295,93 @@ func backoffFor(n int) time.Duration {
 	return d
 }
 
-// Take returns a prewarmed token that is still within TTL, or blocks until
-// one is ready / ctx cancels. Expired tokens are dropped and counted.
-func (p *Pool) Take(ctx context.Context) (string, error) {
+// TakeLease returns a prewarmed token that remains pool capacity until its
+// lease is committed or released.
+func (p *Pool) TakeLease(ctx context.Context) (*TokenLease, error) {
 	for {
 		p.mu.Lock()
 		if err := ctx.Err(); err != nil {
 			p.mu.Unlock()
-			return "", err
+			return nil, err
 		}
 		if p.ctx.Err() != nil {
 			p.mu.Unlock()
-			return "", fmt.Errorf("captcha pool closed")
+			return nil, fmt.Errorf("captcha pool closed")
 		}
 		if len(p.tokens) > 0 {
 			e := p.tokens[0]
 			p.tokens = p.tokens[1:]
-			p.notifyLocked()
-			p.mu.Unlock()
 			if time.Since(e.at) > p.ttl {
 				p.expired.Add(1)
+				p.notifyLocked()
+				p.mu.Unlock()
 				continue
 			}
-			p.takes.Add(1)
-			return e.token, nil
+			p.leased++
+			p.mu.Unlock()
+			return &TokenLease{pool: p, entry: e}, nil
 		}
 		changed := p.changed
 		p.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		case <-p.ctx.Done():
-			return "", fmt.Errorf("captcha pool closed")
+			return nil, fmt.Errorf("captcha pool closed")
 		case <-changed:
 		}
 	}
+}
+
+// Take preserves the original consume-on-take API.
+func (p *Pool) Take(ctx context.Context) (string, error) {
+	for {
+		lease, err := p.TakeLease(ctx)
+		if err != nil {
+			return "", err
+		}
+		token := lease.Token()
+		if lease.Commit() {
+			return token, nil
+		}
+	}
+}
+
+func (p *Pool) finalizeLease(e entry, release bool) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.leased--
+	if !release {
+		if time.Since(e.at) > p.ttl {
+			p.expired.Add(1)
+			p.notifyLocked()
+			return false
+		}
+		p.takes.Add(1)
+		p.notifyLocked()
+		return true
+	}
+	if p.ctx.Err() != nil {
+		p.notifyLocked()
+		return false
+	}
+	if time.Since(e.at) > p.ttl {
+		p.expired.Add(1)
+		p.notifyLocked()
+		return false
+	}
+
+	i := 0
+	for i < len(p.tokens) && p.tokens[i].order < e.order {
+		i++
+	}
+	p.tokens = append(p.tokens, entry{})
+	copy(p.tokens[i+1:], p.tokens[i:])
+	p.tokens[i] = e
+	p.notifyLocked()
+	return false
 }
 
 // Stats returns fill/take/error/expired counters for experiments.

@@ -15,11 +15,12 @@ import (
 // After a hard extract failure (empty token / dead widget), the offending Chrome
 // is killed and replaced so the pool is not stuck on a zombie process.
 type BrowserGroup struct {
-	parent   context.Context
-	cfg      BrowserConfig
-	browsers []*Browser
-	free     chan *Browser
-	done     chan struct{}
+	parent         context.Context
+	cfg            BrowserConfig
+	browserFactory func(context.Context, BrowserConfig) (*Browser, error)
+	browsers       []*Browser
+	free           chan *Browser
+	done           chan struct{}
 
 	mu     sync.Mutex
 	closed bool
@@ -32,17 +33,18 @@ func NewBrowserGroup(parent context.Context, n int, cfg BrowserConfig) (*Browser
 	}
 	cfg = cfg.withDefaults()
 	g := &BrowserGroup{
-		parent:   parent,
-		cfg:      cfg,
-		browsers: make([]*Browser, 0, n),
-		free:     make(chan *Browser, n),
-		done:     make(chan struct{}),
+		parent:         parent,
+		cfg:            cfg,
+		browserFactory: NewBrowser,
+		browsers:       make([]*Browser, 0, n),
+		free:           make(chan *Browser, n),
+		done:           make(chan struct{}),
 	}
 	if cfg.Proxy != "" {
 		log.Printf("captcha chrome proxy=%s", cfg.Proxy)
 	}
 	for i := 0; i < n; i++ {
-		b, err := NewBrowser(parent, cfg)
+		b, err := g.browserFactory(parent, cfg)
 		if err != nil {
 			g.Close()
 			return nil, fmt.Errorf("captcha browser %d: %w", i, err)
@@ -55,6 +57,8 @@ func NewBrowserGroup(parent context.Context, n int, cfg BrowserConfig) (*Browser
 
 // Len returns how many Chrome workers are available.
 func (g *BrowserGroup) Len() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	return len(g.browsers)
 }
 
@@ -136,26 +140,42 @@ func (g *BrowserGroup) release(b *Browser) {
 // and must not be released; the caller releases the returned browser instead.
 func (g *BrowserGroup) recycle(old *Browser) (*Browser, error) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if g.closed {
+		g.mu.Unlock()
 		return nil, fmt.Errorf("captcha browser group closed")
 	}
-	nb, err := NewBrowser(g.parent, g.cfg)
-	if err != nil {
-		return nil, err
-	}
-	replaced := false
+	index := -1
 	for i, b := range g.browsers {
 		if b == old {
-			g.browsers[i] = nb
-			replaced = true
+			index = i
 			break
 		}
 	}
-	if !replaced {
+	if index < 0 {
+		g.mu.Unlock()
+		return nil, fmt.Errorf("browser not in group")
+	}
+	g.mu.Unlock()
+
+	nb, err := g.browserFactory(g.parent, g.cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	g.mu.Lock()
+	if g.closed {
+		g.mu.Unlock()
+		nb.Close()
+		return nil, fmt.Errorf("captcha browser group closed")
+	}
+	if index >= len(g.browsers) || g.browsers[index] != old {
+		g.mu.Unlock()
 		nb.Close()
 		return nil, fmt.Errorf("browser not in group")
 	}
+	g.browsers[index] = nb
+	g.mu.Unlock()
+
 	old.Close()
 	log.Printf("captcha browser recycled after hard extract failure")
 	return nb, nil
