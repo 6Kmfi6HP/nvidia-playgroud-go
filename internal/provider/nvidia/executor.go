@@ -50,6 +50,9 @@ type Executor struct {
 	pool         *captcha.Pool
 	predictURL   func(models.ModelInfo) string
 
+	beforeInflightWait func()
+	beforeSend         func()
+
 	mu          sync.Mutex
 	flagCaptcha string
 }
@@ -255,8 +258,9 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 	}
 
 	var upResp *http.Response
+	staleLeases := 0
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		token, err := e.resolveCaptcha(ctx, clientToken, attempt == 1)
+		token, lease, err := e.resolveCaptcha(ctx, clientToken, attempt == 1)
 		if err != nil {
 			cleanup()
 			return nil, nil, captchaErr(err)
@@ -264,6 +268,9 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 
 		rel, err := e.acquireInflight(ctx)
 		if err != nil {
+			if lease != nil {
+				lease.Release()
+			}
 			cleanup()
 			return nil, nil, &coreauth.Error{
 				Code:       "request_scoped",
@@ -276,6 +283,9 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 		upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			cleanup()
+			if lease != nil {
+				lease.Release()
+			}
 			return nil, nil, err
 		}
 		upReq.Header.Set("Content-Type", "application/json")
@@ -285,6 +295,29 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 		upReq.Header.Set("Origin", "https://build.nvidia.com")
 		upReq.Header.Set("Referer", "https://build.nvidia.com/")
 
+		if e.beforeSend != nil {
+			e.beforeSend()
+		}
+		if err := ctx.Err(); err != nil {
+			cleanup()
+			if lease != nil {
+				lease.Release()
+			}
+			return nil, nil, captchaErr(err)
+		}
+		if lease != nil && !lease.Commit() {
+			cleanup()
+			staleLeases++
+			if staleLeases >= maxAttempts {
+				return nil, nil, &coreauth.Error{
+					Code:       "request_scoped",
+					Message:    "captcha token invalid or expired; retry the request",
+					HTTPStatus: http.StatusUnauthorized,
+				}
+			}
+			attempt--
+			continue
+		}
 		upResp, err = e.httpClient.Do(upReq)
 		if err != nil {
 			cleanup()
@@ -353,6 +386,9 @@ func (e *Executor) acquireInflight(ctx context.Context) (release func(), err err
 
 	timer := time.NewTimer(e.inflightWait)
 	defer timer.Stop()
+	if e.beforeInflightWait != nil {
+		e.beforeInflightWait()
+	}
 	select {
 	case e.inflight <- struct{}{}:
 		return release, nil
@@ -363,9 +399,9 @@ func (e *Executor) acquireInflight(ctx context.Context) (release func(), err err
 	}
 }
 
-func (e *Executor) resolveCaptcha(ctx context.Context, clientToken string, allowFlag bool) (string, error) {
+func (e *Executor) resolveCaptcha(ctx context.Context, clientToken string, allowFlag bool) (string, *captcha.TokenLease, error) {
 	if clientToken != "" {
-		return clientToken, nil
+		return clientToken, nil, nil
 	}
 
 	if allowFlag {
@@ -376,7 +412,7 @@ func (e *Executor) resolveCaptcha(ctx context.Context, clientToken string, allow
 		}
 		e.mu.Unlock()
 		if flagToken != "" {
-			return flagToken, nil
+			return flagToken, nil, nil
 		}
 	}
 
@@ -394,21 +430,22 @@ func (e *Executor) resolveCaptcha(ctx context.Context, clientToken string, allow
 			}
 			log.Printf("captcha pool empty; waiting up to %s (errors will surface from workers)", waitFor)
 		}
-		tok, err := e.pool.Take(takeCtx)
+		lease, err := e.pool.TakeLease(takeCtx)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				fills, takes, errs, expired := e.pool.Stats()
-				return "", fmt.Errorf("captcha pool empty after %s (ready=%d fills=%d takes=%d errors=%d expired=%d); retry later",
+				return "", nil, fmt.Errorf("captcha pool empty after %s (ready=%d fills=%d takes=%d errors=%d expired=%d); retry later",
 					e.captchaWait, e.pool.Ready(), fills, takes, errs, expired)
 			}
-			return "", err
+			return "", nil, err
 		}
-		return tok, nil
+		return lease.Token(), lease, nil
 	}
 	if e.auto {
-		return captcha.Extract(ctx)
+		token, err := captcha.Extract(ctx)
+		return token, nil, err
 	}
-	return "", fmt.Errorf("captcha token required: send nv-captcha-token, or restart with -captcha / -auto")
+	return "", nil, fmt.Errorf("captcha token required: send nv-captcha-token, or restart with -captcha / -auto")
 }
 
 func captchaErr(err error) error {
