@@ -3,6 +3,7 @@ package captcha
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -279,5 +280,277 @@ func TestPoolTakeAfterCloseDoesNotConsumeReadyToken(t *testing.T) {
 	}
 	if got := p.Ready(); got != 1 {
 		t.Fatalf("ready=%d want 1 after closed Take", got)
+	}
+}
+
+func TestPoolTokenLease_ReleaseRestoresEntry(t *testing.T) {
+	p := newStaticPool(
+		entry{token: "oldest", at: time.Now().Add(-time.Second)},
+		entry{token: "newest", at: time.Now()},
+	)
+
+	lease, err := p.TakeLease(context.Background())
+	if err != nil {
+		t.Fatalf("TakeLease: %v", err)
+	}
+	if got := lease.Token(); got != "oldest" {
+		t.Fatalf("Token=%q want oldest", got)
+	}
+	if got := p.Ready(); got != 1 {
+		t.Fatalf("ready=%d want 1 while leased", got)
+	}
+
+	lease.Release()
+	if got := p.Ready(); got != 2 {
+		t.Fatalf("ready=%d want 2 after release", got)
+	}
+	_, takes, _, _ := p.Stats()
+	if takes != 0 {
+		t.Fatalf("takes=%d want 0 after release", takes)
+	}
+
+	token, err := p.Take(context.Background())
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if token != "oldest" {
+		t.Fatalf("Take=%q want oldest (original FIFO order)", token)
+	}
+	_, takes, _, _ = p.Stats()
+	if takes != 1 {
+		t.Fatalf("takes=%d want 1 after Take commits lease", takes)
+	}
+}
+
+func TestPoolTokenLease_CommitAllowsRefill(t *testing.T) {
+	var calls atomic.Int32
+	secondStarted := make(chan struct{})
+	secondRelease := make(chan struct{})
+	extract := func(ctx context.Context) (string, error) {
+		call := calls.Add(1)
+		if call == 1 {
+			return "first", nil
+		}
+		close(secondStarted)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-secondRelease:
+			return "second", nil
+		}
+	}
+
+	p := NewPool(context.Background(), extract, PoolConfig{Size: 1, Workers: 1})
+	defer p.Close()
+	lease, err := p.TakeLease(context.Background())
+	if err != nil {
+		t.Fatalf("TakeLease: %v", err)
+	}
+	if got := p.Ready(); got != 0 {
+		t.Fatalf("ready=%d want 0 while leased", got)
+	}
+	p.mu.Lock()
+	leased := p.leased
+	reserved := p.reserved
+	p.mu.Unlock()
+	if leased != 1 || reserved != 0 {
+		t.Fatalf("leased=%d reserved=%d want 1,0", leased, reserved)
+	}
+	select {
+	case <-secondStarted:
+		t.Fatal("worker refilled before lease commit")
+	default:
+	}
+
+	if !lease.Commit() {
+		t.Fatal("Commit rejected fresh token")
+	}
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not refill after lease commit")
+	}
+	close(secondRelease)
+}
+
+func TestPoolTokenLease_FinalizeOnce(t *testing.T) {
+	tests := []struct {
+		name     string
+		finalize func(*TokenLease)
+	}{
+		{
+			name: "commit then release",
+			finalize: func(lease *TokenLease) {
+				lease.Commit()
+				lease.Release()
+			},
+		},
+		{
+			name: "release then commit",
+			finalize: func(lease *TokenLease) {
+				lease.Release()
+				lease.Commit()
+			},
+		},
+		{
+			name: "concurrent commit and release",
+			finalize: func(lease *TokenLease) {
+				start := make(chan struct{})
+				var wg sync.WaitGroup
+				wg.Add(2)
+				go func() {
+					defer wg.Done()
+					<-start
+					lease.Commit()
+				}()
+				go func() {
+					defer wg.Done()
+					<-start
+					lease.Release()
+				}()
+				close(start)
+				wg.Wait()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newStaticPool(entry{token: "token", at: time.Now()})
+			lease, err := p.TakeLease(context.Background())
+			if err != nil {
+				t.Fatalf("TakeLease: %v", err)
+			}
+
+			tt.finalize(lease)
+
+			p.mu.Lock()
+			leased := p.leased
+			total := len(p.tokens) + p.reserved + p.leased
+			p.mu.Unlock()
+			if leased != 0 {
+				t.Fatalf("leased=%d want 0", leased)
+			}
+			if total > p.size {
+				t.Fatalf("capacity=%d exceeds size=%d", total, p.size)
+			}
+			_, takes, _, _ := p.Stats()
+			if takes > 1 {
+				t.Fatalf("takes=%d want <=1", takes)
+			}
+		})
+	}
+}
+
+func TestPoolTokenLease_ExpiredReleaseIsDiscarded(t *testing.T) {
+	p := newStaticPool(entry{token: "token", at: time.Now()})
+	lease, err := p.TakeLease(context.Background())
+	if err != nil {
+		t.Fatalf("TakeLease: %v", err)
+	}
+	lease.entry.at = time.Now().Add(-2 * p.ttl)
+
+	lease.Release()
+	lease.Release()
+
+	if got := p.Ready(); got != 0 {
+		t.Fatalf("ready=%d want 0", got)
+	}
+	_, takes, _, expired := p.Stats()
+	if takes != 0 {
+		t.Fatalf("takes=%d want 0", takes)
+	}
+	if expired != 1 {
+		t.Fatalf("expired=%d want 1", expired)
+	}
+}
+
+func TestPoolTokenLease_CommitRejectsTokenExpiredWhileLeased(t *testing.T) {
+	p := newStaticPool(entry{token: "expired", at: time.Now()})
+	lease, err := p.TakeLease(context.Background())
+	if err != nil {
+		t.Fatalf("TakeLease: %v", err)
+	}
+	lease.entry.at = time.Now().Add(-2 * p.ttl)
+
+	if lease.Commit() {
+		t.Fatal("Commit succeeded for token expired while leased")
+	}
+
+	_, takes, _, expired := p.Stats()
+	if takes != 0 {
+		t.Fatalf("takes=%d want 0 for token expired before commit", takes)
+	}
+	if expired != 1 {
+		t.Fatalf("expired=%d want 1", expired)
+	}
+}
+
+func TestPoolTokenLease_ReleaseRestoresEqualTimestampFIFO(t *testing.T) {
+	at := time.Now()
+	p := newStaticPool(
+		entry{token: "first", at: at},
+		entry{token: "second", at: at},
+	)
+	p.tokens[0].order = 1
+	p.tokens[1].order = 2
+	first, err := p.TakeLease(context.Background())
+	if err != nil {
+		t.Fatalf("TakeLease first: %v", err)
+	}
+	second, err := p.TakeLease(context.Background())
+	if err != nil {
+		t.Fatalf("TakeLease second: %v", err)
+	}
+
+	second.Release()
+	first.Release()
+
+	for _, want := range []string{"first", "second"} {
+		got, takeErr := p.Take(context.Background())
+		if takeErr != nil {
+			t.Fatalf("Take: %v", takeErr)
+		}
+		if got != want {
+			t.Fatalf("Take=%q want %q (original FIFO order)", got, want)
+		}
+	}
+}
+
+func TestPoolTokenLease_ReleaseAfterCloseIsDiscarded(t *testing.T) {
+	p := newStaticPool(entry{token: "token", at: time.Now()})
+	lease, err := p.TakeLease(context.Background())
+	if err != nil {
+		t.Fatalf("TakeLease: %v", err)
+	}
+	p.Close()
+
+	lease.Release()
+	lease.Commit()
+
+	if got := p.Ready(); got != 0 {
+		t.Fatalf("ready=%d want 0", got)
+	}
+	p.mu.Lock()
+	leased := p.leased
+	p.mu.Unlock()
+	if leased != 0 {
+		t.Fatalf("leased=%d want 0", leased)
+	}
+}
+
+func newStaticPool(entries ...entry) *Pool {
+	ctx, cancel := context.WithCancel(context.Background())
+	for i := range entries {
+		entries[i].order = uint64(i)
+	}
+	return &Pool{
+		size:      len(entries),
+		ttl:       time.Minute,
+		tokens:    entries,
+		nextOrder: uint64(len(entries)),
+		changed:   make(chan struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 }
