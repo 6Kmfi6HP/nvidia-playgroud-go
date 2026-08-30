@@ -174,7 +174,6 @@ func main() {
 	}
 
 	exec := nvidia.NewExecutor(nvidia.Options{
-		Auto:         *auto,
 		FlagCaptcha:  *captchaFlag,
 		Coalesce:     time.Duration(*coalesceMs) * time.Millisecond,
 		MaxInflight:  *maxInflight,

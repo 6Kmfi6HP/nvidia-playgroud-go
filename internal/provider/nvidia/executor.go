@@ -42,7 +42,6 @@ const (
 
 // Options configures the Nvidia playground executor.
 type Options struct {
-	Auto         bool
 	FlagCaptcha  string
 	Coalesce     time.Duration
 	MaxInflight  int
@@ -57,7 +56,6 @@ type Options struct {
 
 // Executor implements coreauth.ProviderExecutor for NVIDIA playground predict.
 type Executor struct {
-	auto         bool
 	coalesce     time.Duration
 	httpClient   *http.Client
 	inflight     chan struct{}
@@ -76,7 +74,6 @@ type Executor struct {
 // NewExecutor builds an Executor from Options.
 func NewExecutor(opts Options) *Executor {
 	e := &Executor{
-		auto:         opts.Auto,
 		coalesce:     opts.Coalesce,
 		httpClient:   opts.HTTPClient,
 		inflightWait: opts.InflightWait,
@@ -359,7 +356,7 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 		clientToken = opts.Headers.Get(headerCaptchaToken)
 	}
 	maxAttempts := 1
-	if clientToken == "" && (e.pool != nil || e.auto) {
+	if clientToken == "" && e.pool != nil {
 		maxAttempts = 3
 	}
 
@@ -560,10 +557,6 @@ func (e *Executor) resolveCaptcha(ctx context.Context, clientToken string, allow
 		}
 		token := lease.Token()
 		return token, lease, nil
-	}
-	if e.auto {
-		token, err := captcha.Extract(ctx)
-		return token, nil, err
 	}
 	return "", nil, fmt.Errorf("captcha token required: send nv-captcha-token, or restart with -captcha / -auto")
 }
