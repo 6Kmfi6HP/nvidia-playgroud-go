@@ -88,8 +88,13 @@ func main() {
 			log.Fatalf("proxy: invalid URL %q", proxyURL)
 		}
 		proxyFunc = http.ProxyURL(u)
-		log.Printf("upstream proxy=%s (API + PoW solver)", proxyURL)
+		log.Printf("upstream proxy=%s (PoW solver + catalog; predict API direct)", proxyURL)
 	}
+	// Predict requests to the NVIDIA gateway are latency-sensitive and reachable
+	// without the proxy: always connect to buildapi.ngc.nvidia.com directly,
+	// while hCaptcha PoW solving, the model-catalog scraper, and WAF token
+	// minting keep routing through the proxy.
+	proxyFunc = bypassHostProxy(proxyFunc, models.PredictBase)
 
 	transport := &http.Transport{
 		Proxy: proxyFunc,
@@ -109,8 +114,8 @@ func main() {
 
 	// Route the pure-Go PoW solver's own HTTP traffic (checksiteconfig, hsw.js
 	// download, getcaptcha exchange) and the model-catalog scraper through
-	// the same proxy as upstream API calls. Each package keeps its own
-	// overall request timeout.
+	// the upstream proxy (predict API itself stays direct via bypassHostProxy).
+	// Each package keeps its own overall request timeout.
 	hcaptcha.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: transport})
 	hsw.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: transport})
 	hcaptchapow.SetHTTPClient(&http.Client{Timeout: 30 * time.Second, Transport: transport})
@@ -274,6 +279,23 @@ func main() {
 
 func execCoalesce(ms int) time.Duration {
 	return time.Duration(ms) * time.Millisecond
+}
+
+// bypassHostProxy wraps pf so that requests to the given base URL (matched
+// by hostname) always dial directly, bypassing the configured upstream proxy.
+// Any other request is delegated to pf unchanged. A nil pf means "no proxy".
+func bypassHostProxy(pf func(*http.Request) (*url.URL, error), baseURL string) func(*http.Request) (*url.URL, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return pf
+	}
+	directHost := strings.ToLower(u.Hostname())
+	return func(req *http.Request) (*url.URL, error) {
+		if req != nil && req.URL != nil && strings.EqualFold(req.URL.Hostname(), directHost) {
+			return nil, nil // direct connection, no proxy
+		}
+		return pf(req)
+	}
 }
 
 // powExtractTimed wraps the pure-Go hCaptcha PoW extractor with a per-decode
