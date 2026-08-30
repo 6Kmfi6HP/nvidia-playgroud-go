@@ -201,6 +201,24 @@ go run ./cmd/captchapow -v
 go run ./cmd/captchapow -sitekey <sitekey> -host <host>
 ```
 
+拿到 token 后直接打一次 predict，并自定义 NVCF 三元组（`nv-function-id` / `{namespace}` / `{slug}`）——token 由纯 Go PoW 现解：
+
+```bash
+# 注册表模型（默认 moonshotai/kimi-k3）：三元组自动查表
+go run ./cmd/predict -prompt "ping"
+go run ./cmd/predict -model minimaxai/minimax-m3 -v            # -v 打印目标 URL + 求解耗时/难度
+
+# 注册表里还没有的端点：手工指定 slug / function-id（namespace 默认 qc69jvmznzxy）
+go run ./cmd/predict -model acme/new-llm -slug new-llm -function-id <uuid>
+
+# 其他开关
+go run ./cmd/predict -list                                     # 打印已知 namespace/slug/function-id
+go run ./cmd/predict -curl -slug kimi-k3 -function-id <uuid> -captcha "P1_..."   # 只输出等价 curl，不发送
+go run ./cmd/predict -n 2 -stream=false -max-tokens 16          # 连发两次，每次现解一个一次性 token
+```
+
+`cmd/predict` 走的是仓库客户端（`glm52.WithModelInfo` 绕过注册表），请求头与 `serve` 完全一致；`-captcha` 固定 token 时只允许 `-n 1`（token 单次有效）。
+
 在代码中使用：
 
 ```go
@@ -258,6 +276,7 @@ curl -s http://localhost:8080/healthz
 ```
 
 - 验证码来源优先级：请求头 `nv-captcha-token` > `-captcha` 一次性 flag（首请求消费后失效）> `-auto` 池（默认 PoW 求解，池空时最多等 `-captcha-wait` 默认 30s 后返回 503）。
+- 指定 NVCF 实例：请求体 `model` 写成 `<function-id>@<model>`（如 `1586112a-925c-48af-8631-7c815dbd749c@moonshotai/kimi-k3`），或直接给 `nv-function-id: <function-id>` 请求头；body 的 pin 优先级高于 header。
 - 上游返回 captcha 形状的 4xx（`Token is invalid` / `hcaptcha` 字样）时自动换新 token 重试，最多 3 次尝试（2 次换新）；池内 token 默认 90s TTL 过期丢弃。
 - 流式优化：关闭 `continuous_usage_stats`、可选 content coalesce（`-coalesce-ms`）；`-max-inflight` 限制并发上游流（默认 4，超限等待 `-inflight-wait` 500ms 后 503）。
 - 模型目录热刷新：`-model-refresh`（默认 6h；`0` 只启动拉一次；`<0` 关闭）。目录抓取使用 **tls-client 模拟 Chrome 131 的 TLS/HTTP2 指纹**（JA3/JA4 + HTTP/2 SETTINGS），并经代理走固定出口；优先 filtered 列表 URL（40 个候选），被 AWS WAF 挑战时由 **internal/waftoken** 自动求解（挑战页 → challenge.js → V8 解混淆提取 AES 密钥 → 浏览器信号 AES-256-GCM 加密 → 解 PoW（NetworkBandwidth/scrypt/SHA-2）→ POST 换 `aws-waf-token`，纯 Go 无浏览器无 Node），仍失败才回退 unfiltered 页面（24 候选）。Akamai `ak_bmsc`/`bm_mi` 等会话 cookie 由内置 jar 自动吸收并重放。抓取成功后注册表自动持久化到 `-model-cache` JSON（默认 `models_cache.json`，已加入 .gitignore），启动时优先加载，失败/离线也能立即出模型。
@@ -324,6 +343,7 @@ nvidia-playgroud-go/
 ├── internal/hcaptcha/    # 无浏览器编排：指纹→n→getcaptcha→P1 token
 ├── internal/models/      # Playground 模型注册表：registry.go（快照）+ fetch.go（实时抓取）
 ├── cmd/captchapow/       # 纯 Go PoW 求解 CLI（无浏览器）
+├── cmd/predict/          # 单发 predict CLI：自定义 function-id/namespace/slug + PoW 自动求解
 ├── cmd/example/          # 命令行示例（-captcha / -auto / -smooth-ms 打字机输出）
 ├── cmd/serve/            # 多格式网关（chat/completions + responses + messages；模型热刷新）
 ├── cmd/streambench/      # SSE 时序 + 并发实验（-concurrency）

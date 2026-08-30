@@ -831,3 +831,161 @@ func TestExecute_forwardsResponsesStoreWithoutRejecting(t *testing.T) {
 		t.Fatalf("upstream hits=%d", hits)
 	}
 }
+
+// pinnedFunction is a function id that is not in the registry, so any test that
+// sees it proves the per-request pin won over the registry value.
+const pinnedFunction = "4f1a2b3c-0000-4000-8000-000000000001"
+
+func TestPreparePayloadFunctionPin(t *testing.T) {
+	reg, err := models.Lookup("moonshotai/kimi-k3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := NewExecutor(Options{})
+
+	cases := []struct {
+		name         string
+		model        string
+		headerPin    string
+		wantFunction string
+		wantBody     string
+		wantErr      string
+	}{
+		{
+			name:         "no pin uses the registry value",
+			model:        "moonshotai/kimi-k3",
+			wantFunction: reg.FunctionID,
+			wantBody:     "moonshotai/kimi-k3",
+		},
+		{
+			name:         "body pin overrides the function id",
+			model:        pinnedFunction + "@moonshotai/kimi-k3",
+			wantFunction: pinnedFunction,
+			wantBody:     "moonshotai/kimi-k3",
+		},
+		{
+			name:         "header pin overrides the function id",
+			model:        "moonshotai/kimi-k3",
+			headerPin:    pinnedFunction,
+			wantFunction: pinnedFunction,
+			wantBody:     "moonshotai/kimi-k3",
+		},
+		{
+			name:         "body pin wins over header pin",
+			model:        pinnedFunction + "@moonshotai/kimi-k3",
+			headerPin:    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			wantFunction: pinnedFunction,
+			wantBody:     "moonshotai/kimi-k3",
+		},
+		{
+			name:         "blank header pin is ignored",
+			model:        "moonshotai/kimi-k3",
+			headerPin:    "   ",
+			wantFunction: reg.FunctionID,
+			wantBody:     "moonshotai/kimi-k3",
+		},
+		{
+			name:         "invalid header pin is a client error",
+			model:        "moonshotai/kimi-k3",
+			headerPin:    "pinned id",
+			wantFunction: reg.FunctionID,
+			wantErr:      "nv-function-id",
+		},
+		{
+			name:    "unknown pinned model reports the bare id",
+			model:   pinnedFunction + "@acme/not-in-registry",
+			wantErr: "unknown model: acme/not-in-registry",
+		},
+		{
+			name:    "empty pinned model is a client error",
+			model:   pinnedFunction + "@",
+			wantErr: "missing model id",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			headers := http.Header{}
+			if tc.headerPin != "" {
+				headers.Set("nv-function-id", tc.headerPin)
+			}
+			body, info, err := e.preparePayload(clipexec.Request{
+				Model:   tc.model,
+				Payload: []byte(`{"model":"` + tc.model + `","messages":[{"role":"user","content":"hi"}]}`),
+			}, clipexec.Options{SourceFormat: sdktranslator.FormatOpenAI, Headers: headers}, false)
+
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("want error containing %q", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+				}
+				var ae *coreauth.Error
+				if !errors.As(err, &ae) || ae.HTTPStatus != http.StatusBadRequest {
+					t.Fatalf("err = %v, want a 400 coreauth.Error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.FunctionID != tc.wantFunction {
+				t.Fatalf("function id = %q, want %q", info.FunctionID, tc.wantFunction)
+			}
+			var probe struct {
+				Model string `json:"model"`
+			}
+			if err := json.Unmarshal(body, &probe); err != nil {
+				t.Fatal(err)
+			}
+			if probe.Model != tc.wantBody {
+				t.Fatalf("body model = %q, want %q (the pin must not reach upstream)", probe.Model, tc.wantBody)
+			}
+		})
+	}
+}
+
+func TestExecuteStreamSendsPinnedFunctionID(t *testing.T) {
+	var gotFunction, gotBodyModel string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotFunction = r.Header.Get("nv-function-id")
+		var body map[string]any
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		gotBodyModel, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer up.Close()
+
+	e := NewExecutor(Options{
+		FlagCaptcha: "P1_test",
+		HTTPClient:  up.Client(),
+		PredictURL:  func(models.ModelInfo) string { return up.URL },
+	})
+
+	pinned := pinnedFunction + "@moonshotai/kimi-k3"
+	stream, err := e.ExecuteStream(context.Background(), nil, clipexec.Request{
+		Model:   pinned,
+		Payload: []byte(`{"model":"` + pinned + `","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+	}, clipexec.Options{
+		Stream:       true,
+		SourceFormat: sdktranslator.FormatOpenAI,
+		Headers:      http.Header{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for chunk := range stream.Chunks {
+		if chunk.Err != nil {
+			t.Fatal(chunk.Err)
+		}
+	}
+	if gotFunction != pinnedFunction {
+		t.Fatalf("upstream nv-function-id = %q, want %q", gotFunction, pinnedFunction)
+	}
+	if gotBodyModel != "moonshotai/kimi-k3" {
+		t.Fatalf("upstream body model = %q, want the unpinned model id", gotBodyModel)
+	}
+}

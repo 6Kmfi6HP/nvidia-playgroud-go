@@ -9,6 +9,10 @@
 //
 // No inbound gateway API keys. Captcha via -auto pool, -captcha, or nv-captcha-token.
 //
+// A request pins the NVCF function (the serving instance behind a playground
+// slug) with "function-id@model-id" in the model field or an nv-function-id
+// header; see function_pin.go.
+//
 // Usage:
 //
 //	go run ./cmd/serve -auto
@@ -234,6 +238,9 @@ func main() {
 		WithConfigPath(cfgPath).
 		WithCoreAuthManager(core).
 		WithServerOptions(
+			// Splits "<function-id>@<model>" bodies into a plain model id plus the
+			// nv-function-id header before cliproxy routes the request by model.
+			api.WithMiddleware(functionPinMiddleware()),
 			// CLIProxyAPI already registers GET/HEAD /healthz; re-registering panics.
 			// Install middleware before routes so we can enrich the response with pool stats.
 			api.WithEngineConfigurator(func(engine *gin.Engine) {

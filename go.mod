@@ -10,6 +10,8 @@ require (
 	github.com/chromedp/chromedp v0.16.0
 	github.com/gin-gonic/gin v1.10.1
 	github.com/router-for-me/CLIProxyAPI/v7 v7.2.97
+	github.com/tidwall/gjson v1.18.0
+	github.com/tidwall/sjson v1.2.5
 	github.com/tommie/v8go v0.34.0
 	golang.org/x/crypto v0.55.0
 )
@@ -56,10 +58,8 @@ require (
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
-	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
-	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tiktoken-go/tokenizer v0.8.1 // indirect
 	github.com/tommie/v8go/deps/android_amd64 v0.0.0-20250515043113-5dcc98077472 // indirect
 	github.com/tommie/v8go/deps/android_arm64 v0.0.0-20250515043113-5dcc98077472 // indirect

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"glm52-nvidia/internal/models"
 )
 
 func TestBuildRequestUsesCaptchaAuthentication(t *testing.T) {
@@ -164,5 +166,79 @@ func TestBuildRequestUnknownModel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no-such-org/never") {
 		t.Fatalf("error %q should name the model", err.Error())
+	}
+}
+
+// TestBuildRequestAppliesFunctionPin checks the "function-id@model" form: the
+// pinned id becomes the nv-function-id header, the endpoint still comes from
+// the registry, and the body carries the plain model id.
+func TestBuildRequestAppliesFunctionPin(t *testing.T) {
+	const pinned = "4f1a2b3c-0000-4000-8000-000000000001"
+	client := New(WithCaptchaToken("t"), WithModel(pinned+"@"+DefaultModel))
+
+	req := &ChatRequest{Messages: []Message{{Role: RoleUser, Content: "Hi"}}}
+	client.applyDefaults(req)
+	httpReq, err := client.buildRequest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("buildRequest() error = %v", err)
+	}
+	if httpReq.URL.String() != PredictEndpoint {
+		t.Errorf("URL = %q, want the pinned model's endpoint %q", httpReq.URL.String(), PredictEndpoint)
+	}
+	if got := httpReq.Header.Get("nv-function-id"); got != pinned {
+		t.Errorf("nv-function-id = %q, want %q", got, pinned)
+	}
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var got ChatRequest
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if got.Model != DefaultModel {
+		t.Errorf("body model = %q, want %q without the pin", got.Model, DefaultModel)
+	}
+	if req.Model != DefaultModel {
+		t.Errorf("caller request model = %q, want %q", req.Model, DefaultModel)
+	}
+}
+
+// TestBuildRequestPinRejectsMalformedID keeps a typo out of the wire: an empty
+// or unsafe function id must fail locally instead of 400-ing upstream.
+func TestBuildRequestPinRejectsMalformedID(t *testing.T) {
+	for _, model := range []string{"@moonshotai/kimi-k3", pinnedBadID + "@moonshotai/kimi-k3", "4f1a2b3c-0000-4000-8000-000000000001@"} {
+		client := New(WithCaptchaToken("t"), WithModel(model))
+		if _, err := client.buildRequest(context.Background(), &ChatRequest{Model: model, Messages: []Message{{Role: RoleUser, Content: "Hi"}}}); err == nil {
+			t.Errorf("buildRequest(%q) error = nil, want a client error", model)
+		}
+	}
+}
+
+const pinnedBadID = "not a uuid"
+
+// TestBuildRequestModelInfoOverrideWins documents the precedence with an
+// explicit target: WithModelInfo pins namespace/slug/function id, and a model
+// pin only strips itself out of the body.
+func TestBuildRequestModelInfoOverrideWins(t *testing.T) {
+	const pinned = "4f1a2b3c-0000-4000-8000-000000000001"
+	client := New(
+		WithCaptchaToken("t"),
+		WithModelInfo(models.ModelInfo{Namespace: "ns", Slug: "sl", FunctionID: "override-id"}),
+	)
+	model := pinned + "@" + DefaultModel
+	httpReq, err := client.buildRequest(context.Background(), &ChatRequest{Model: model, Messages: []Message{{Role: RoleUser, Content: "Hi"}}})
+	if err != nil {
+		t.Fatalf("buildRequest() error = %v", err)
+	}
+	if got := httpReq.Header.Get("nv-function-id"); got != "override-id" {
+		t.Errorf("nv-function-id = %q, want the explicit override", got)
+	}
+	if want := "https://buildapi.ngc.nvidia.com/v2/predict/models/ns/sl"; httpReq.URL.String() != want {
+		t.Errorf("URL = %q, want %q", httpReq.URL.String(), want)
+	}
+	body, _ := io.ReadAll(httpReq.Body)
+	if strings.Contains(string(body), pinned) {
+		t.Errorf("body still carries the pin: %s", body)
 	}
 }

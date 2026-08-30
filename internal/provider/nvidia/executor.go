@@ -24,6 +24,14 @@ import (
 
 const providerKey = "nvidia"
 
+// headerFunctionID is the NVCF function header: set on every upstream predict
+// request, and read back from inbound gateway requests so a client can pin the
+// instance it wants. headerCaptchaToken is the one-shot hCaptcha passcode.
+const (
+	headerFunctionID   = "nv-function-id"
+	headerCaptchaToken = "nv-captcha-token"
+)
+
 // Options configures the Nvidia playground executor.
 type Options struct {
 	Auto         bool
@@ -204,14 +212,66 @@ func (e *Executor) preparePayload(req clipexec.Request, opts clipexec.Options, s
 	if lookupModel == "" {
 		lookupModel = model
 	}
-	info, err := models.Lookup(lookupModel)
+
+	info, canonical, err := resolveInvokeTarget(lookupModel, opts.Headers)
 	if err != nil {
-		if uerr, ok := err.(*models.ErrUnknownModel); ok {
-			return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, uerr.Error())
+		// Both shapes reaching here are client errors: an unknown model id, or a
+		// malformed "<function-id>@" pin.
+		return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, err.Error())
+	}
+	// A "<function-id>@<model>" pin is gateway routing syntax: the upstream
+	// body must carry the plain registry model id.
+	if canonical != modelProbe.Model {
+		body, err = setBodyModel(body, canonical)
+		if err != nil {
+			return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, "invalid json body")
 		}
-		return nil, models.ModelInfo{}, err
 	}
 	return body, info, nil
+}
+
+// resolveInvokeTarget looks up the predict target for a model id, applying a
+// per-request NVCF function-id pin. The pin comes from the model field
+// ("<function-id>@<publisher>/<slug>", which wins) or from the inbound
+// nv-function-id header; the gateway middleware rewrites a body pin into that
+// header so cliproxy's model routing still sees a known model id.
+func resolveInvokeTarget(model string, headers http.Header) (models.ModelInfo, string, error) {
+	pin, base, hasPin := models.SplitFunctionRef(model)
+	if hasPin {
+		if err := models.ValidateFunctionRef(pin, base); err != nil {
+			return models.ModelInfo{}, "", err
+		}
+	} else {
+		base = model
+	}
+
+	info, err := models.Lookup(base)
+	if err != nil {
+		return models.ModelInfo{}, "", err
+	}
+	if hasPin {
+		info.FunctionID = pin
+		return info, base, nil
+	}
+
+	if hdr := strings.TrimSpace(headers.Get(headerFunctionID)); hdr != "" {
+		if !models.ValidFunctionID(hdr) {
+			return models.ModelInfo{}, "", models.InvalidFunctionIDError(hdr)
+		}
+		info.FunctionID = hdr
+	}
+	return info, model, nil
+}
+
+// setBodyModel replaces the top-level model field of an already-valid request
+// body, leaving every other field untouched.
+func setBodyModel(body []byte, model string) ([]byte, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	raw["model"] = model
+	return json.Marshal(raw)
 }
 
 func forceStreamFlag(body []byte, stream bool) ([]byte, error) {
@@ -237,7 +297,7 @@ func forceStreamFlag(body []byte, stream bool) ([]byte, error) {
 func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []byte, opts clipexec.Options) (*http.Response, func(), error) {
 	clientToken := ""
 	if opts.Headers != nil {
-		clientToken = opts.Headers.Get("nv-captcha-token")
+		clientToken = opts.Headers.Get(headerCaptchaToken)
 	}
 	maxAttempts := 1
 	if clientToken == "" && (e.pool != nil || e.auto) {
@@ -290,8 +350,8 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 		}
 		upReq.Header.Set("Content-Type", "application/json")
 		upReq.Header.Set("Accept", "text/event-stream")
-		upReq.Header.Set("nv-function-id", info.FunctionID)
-		upReq.Header.Set("nv-captcha-token", token)
+		upReq.Header.Set(headerFunctionID, info.FunctionID)
+		upReq.Header.Set(headerCaptchaToken, token)
 		upReq.Header.Set("Origin", "https://build.nvidia.com")
 		upReq.Header.Set("Referer", "https://build.nvidia.com/")
 

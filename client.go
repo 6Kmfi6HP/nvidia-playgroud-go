@@ -31,6 +31,10 @@ type Client struct {
 
 	// thinking mirrors Playground: chat_template_kwargs.enable_thinking
 	thinking *bool
+
+	// infoOverride bypasses registry lookup in buildRequest (custom
+	// namespace/slug/function-id targets). Nil means use the registry.
+	infoOverride *models.ModelInfo
 }
 
 // Option configures the Client.
@@ -50,6 +54,14 @@ func WithHTTPClient(hc *http.Client) Option {
 // WithModel overrides the model name.
 func WithModel(m string) Option {
 	return func(c *Client) { c.model = m }
+}
+
+// WithModelInfo pins the NVCF invocation target (namespace, slug,
+// function id) directly, bypassing the model registry. Use it to call a
+// predict endpoint the registry does not know yet. The request body's
+// model field still comes from WithModel / req.Model.
+func WithModelInfo(info models.ModelInfo) Option {
+	return func(c *Client) { c.infoOverride = &info }
 }
 
 // WithDefaults sets default request parameters.
@@ -94,9 +106,14 @@ func (c *Client) buildRequest(ctx context.Context, req *ChatRequest) (*http.Requ
 	if model == "" {
 		model = c.model
 	}
-	info, err := models.Lookup(model)
+	info, canonical, err := c.modelInfo(model)
 	if err != nil {
 		return nil, fmt.Errorf("glm52: %w", err)
+	}
+	// A "<function-id>@<model>" pin selects the NVCF function; the body keeps
+	// the plain registry model id NVIDIA expects to see.
+	if req.Model == model && model != canonical {
+		req.Model = canonical
 	}
 
 	body, err := json.Marshal(req)
@@ -142,7 +159,7 @@ func (c *Client) applyDefaults(r *ChatRequest) {
 			// Only inject thinking kwargs for models known to accept them
 			// (Capability.Thinking). Most of the current anonymous catalog
 			// (kimi-k3 etc.) rejects chat_template_kwargs with 400.
-			info, err := models.Lookup(r.Model)
+			info, _, err := c.modelInfo(r.Model)
 			if err != nil || info.Capability == nil || !info.Capability.Thinking {
 				return
 			}
@@ -154,6 +171,32 @@ func (c *Client) applyDefaults(r *ChatRequest) {
 			}
 		}
 	}
+}
+
+// modelInfo resolves the NVCF invocation data for a request and the canonical
+// model id to send upstream: the explicit WithModelInfo override when set,
+// otherwise the registry. A "<function-id>@<model>" pin overrides the registry
+// function id, which is how a caller reaches a specific NVCF instance behind a
+// playground slug.
+func (c *Client) modelInfo(model string) (models.ModelInfo, string, error) {
+	pin, base, hasPin := models.SplitFunctionRef(model)
+	if hasPin {
+		if err := models.ValidateFunctionRef(pin, base); err != nil {
+			return models.ModelInfo{}, "", err
+		}
+		model = base
+	}
+	if c.infoOverride != nil {
+		return *c.infoOverride, model, nil
+	}
+	info, err := models.Lookup(model)
+	if err != nil {
+		return models.ModelInfo{}, "", err
+	}
+	if hasPin {
+		info.FunctionID = pin
+	}
+	return info, model, nil
 }
 
 // --- Public API ---
