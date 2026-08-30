@@ -47,7 +47,8 @@ var version = "dev"
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	captchaFlag := flag.String("captcha", "", "one-shot hCaptcha token (consumed on first use)")
-	auto := flag.Bool("auto", false, "prewarm captcha tokens via shared Chrome + pool")
+	auto := flag.Bool("auto", false, "prewarm captcha tokens via the captcha pool")
+	captchaSolver := flag.String("captcha-solver", "pow", "captcha token source: pow (pure-Go hCaptcha PoW via embedded V8; default, no browser) or browser (headless Chromium fallback)")
 	poolSize := flag.Int("pool-size", 3, "ready captcha tokens to keep buffered (-auto)")
 	poolWorkers := flag.Int("pool-workers", 1, "concurrent captcha extractors / Chrome processes (-auto); each worker owns one Chrome")
 	maxInflight := flag.Int("max-inflight", 4, "max concurrent upstream streams (0=unlimited)")
@@ -102,24 +103,36 @@ func main() {
 		pool    *captcha.Pool
 	)
 	if *auto {
-		var err error
-		browser, err = captcha.NewBrowserGroup(ctx, *poolWorkers, captcha.BrowserConfig{
-			Proxy: proxyURL,
-		})
-		if err != nil {
-			log.Fatalf("captcha browser: %v", err)
-		}
-		pool = captcha.NewPool(ctx, browser.Extract, captcha.PoolConfig{
+		poolCfg := captcha.PoolConfig{
 			Size:    *poolSize,
 			Workers: *poolWorkers,
 			TTL:     *poolTTL,
-		})
+		}
+		switch *captchaSolver {
+		case "pow":
+			pool = captcha.NewPool(ctx, captcha.PowExtract(), poolCfg)
+			log.Printf("captcha pool: solver=pow (pure Go, no browser) size=%d workers=%d ttl=%s captcha-wait=%s",
+				*poolSize, *poolWorkers, *poolTTL, *captchaWait)
+		case "browser":
+			var err error
+			browser, err = captcha.NewBrowserGroup(ctx, *poolWorkers, captcha.BrowserConfig{
+				Proxy: proxyURL,
+			})
+			if err != nil {
+				log.Fatalf("captcha browser: %v", err)
+			}
+			pool = captcha.NewPool(ctx, browser.Extract, poolCfg)
+			log.Printf("captcha pool: solver=browser (headless Chromium) size=%d workers=%d chromes=%d ttl=%s captcha-wait=%s",
+				*poolSize, *poolWorkers, browser.Len(), *poolTTL, *captchaWait)
+		default:
+			log.Fatalf(`-captcha-solver must be "pow" or "browser", got %q`, *captchaSolver)
+		}
 		defer func() {
 			pool.Close()
-			browser.Close()
+			if browser != nil {
+				browser.Close()
+			}
 		}()
-		log.Printf("captcha pool: size=%d workers=%d chromes=%d ttl=%s captcha-wait=%s",
-			*poolSize, *poolWorkers, browser.Len(), *poolTTL, *captchaWait)
 
 		if *warmTimeout > 0 {
 			log.Printf("warming captcha pool (timeout=%s)…", *warmTimeout)
