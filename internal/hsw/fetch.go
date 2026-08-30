@@ -40,6 +40,11 @@ const (
 
 var hswClient = &http.Client{Timeout: httpTimeout}
 
+// SetHTTPClient replaces the client used for hsw.js downloads and
+// checksiteconfig fetches. cmd/serve uses it to route pure-Go PoW solving
+// through the upstream proxy. Must be called before solving starts.
+func SetHTTPClient(c *http.Client) { hswClient = c }
+
 var (
 	// reWindowHSW matches the v1 bundle tail: window.hsw = function(...)...
 	reWindowHSW = regexp.MustCompile(`window\.hsw\s*=`)

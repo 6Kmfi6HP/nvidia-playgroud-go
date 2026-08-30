@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -34,6 +33,7 @@ import (
 	"glm52-nvidia/internal/captcha"
 	"glm52-nvidia/internal/hcaptcha"
 	"glm52-nvidia/internal/hcaptchapow"
+	"glm52-nvidia/internal/hsw"
 	"glm52-nvidia/internal/provider/nvidia"
 
 	"github.com/gin-gonic/gin"
@@ -57,18 +57,17 @@ func main() {
 	maxInflight := flag.Int("max-inflight", 4, "max concurrent upstream streams (0=unlimited)")
 	inflightWait := flag.Duration("inflight-wait", 500*time.Millisecond, "how long to wait for an in-flight slot before returning 503 (0=reject immediately)")
 	coalesceMs := flag.Int("coalesce-ms", 16, "merge consecutive SSE content deltas within this window (0=off); first token always flushes immediately")
-	warmTimeout := flag.Duration("warm-timeout", 3*time.Minute, "wait for at least one pooled captcha before serving (-auto); 0=skip")
 	poolTTL := flag.Duration("pool-ttl", 90*time.Second, "discard pooled captcha tokens older than this (-auto)")
 	captchaWait := flag.Duration("captcha-wait", 30*time.Second, "max wait for a pooled captcha token per request (0=block until ready); then 503")
 	modelRefresh := flag.Duration("model-refresh", 6*time.Hour, "re-scrape build.nvidia.com for the playground model catalog on this interval (0=fetch once at startup; <0=keep the compiled-in snapshot)")
-	chromeProxy := flag.String("chrome-proxy", "", "proxy for upstream API (e.g. socks5://host:port); falls back to CHROME_PROXY")
+	proxy := flag.String("proxy", "", "proxy for upstream API and the pure-Go PoW solver (e.g. socks5://host:port); falls back to CHROME_PROXY")
 	flag.Parse()
 
 	if !*auto && *captchaFlag == "" {
 		log.Print("warning: no -auto/-captcha; each request must send nv-captcha-token")
 	}
 
-	proxyURL := strings.TrimSpace(*chromeProxy)
+	proxyURL := strings.TrimSpace(*proxy)
 	if proxyURL == "" {
 		proxyURL = strings.TrimSpace(os.Getenv("CHROME_PROXY"))
 	}
@@ -76,10 +75,10 @@ func main() {
 	if proxyURL != "" {
 		u, err := url.Parse(proxyURL)
 		if err != nil || u.Scheme == "" || u.Host == "" {
-			log.Fatalf("chrome-proxy: invalid URL %q", proxyURL)
+			log.Fatalf("proxy: invalid URL %q", proxyURL)
 		}
 		proxyFunc = http.ProxyURL(u)
-		log.Printf("upstream proxy=%s", proxyURL)
+		log.Printf("upstream proxy=%s (API + PoW solver)", proxyURL)
 	}
 
 	transport := &http.Transport{
@@ -98,6 +97,13 @@ func main() {
 		ResponseHeaderTimeout: 120 * time.Second,
 	}
 
+	// Route the pure-Go PoW solver's own HTTP traffic (checksiteconfig, hsw.js
+	// download, getcaptcha exchange) through the same proxy as upstream API
+	// calls. Each package keeps its own overall request timeout.
+	hcaptcha.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: transport})
+	hsw.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: transport})
+	hcaptchapow.SetHTTPClient(&http.Client{Timeout: 30 * time.Second, Transport: transport})
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -114,15 +120,6 @@ func main() {
 		log.Printf("captcha pool: solver=pow (pure Go, no browser) size=%d workers=%d ttl=%s captcha-wait=%s",
 			*poolSize, *poolWorkers, *poolTTL, *captchaWait)
 		defer pool.Close()
-
-		if *warmTimeout > 0 {
-			log.Printf("warming captcha pool (timeout=%s)…", *warmTimeout)
-			if err := waitPoolReady(ctx, pool, 1, *warmTimeout); err != nil {
-				log.Printf("warning: %v — first requests may block on captcha extract", err)
-			} else {
-				log.Printf("captcha pool ready=%d (TTFT path unblocked)", pool.Ready())
-			}
-		}
 	}
 
 	exec := nvidia.NewExecutor(nvidia.Options{
@@ -259,24 +256,5 @@ func powExtractTimed() captcha.ExtractFunc {
 		log.Printf("captcha pool: pow decoded in %s difficulty=%s (avg %s over %d solves, ~%d tokens/h/worker)",
 			elapsed.Round(time.Millisecond), difficulty, avg.Round(time.Millisecond), count, rate)
 		return token, nil
-	}
-}
-
-func waitPoolReady(ctx context.Context, pool *captcha.Pool, want int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(400 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if pool.Ready() >= want {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("captcha pool still empty after %s", timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
 	}
 }

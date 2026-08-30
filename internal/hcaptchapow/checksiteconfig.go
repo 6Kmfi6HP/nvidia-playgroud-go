@@ -15,6 +15,15 @@ import (
 // tests.
 var checksiteconfigURL = "https://api.hcaptcha.com/checksiteconfig"
 
+// httpClient is the shared client for checksiteconfig calls. cmd/serve
+// replaces it via SetHTTPClient to route PoW solving through the upstream
+// proxy.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// SetHTTPClient replaces the client used for checksiteconfig calls. Must be
+// called before solving starts.
+func SetHTTPClient(c *http.Client) { httpClient = c }
+
 // CheckSiteConfigChallenge mirrors the "c" object of a checksiteconfig
 // response. Req is the PoW JWT consumed by MintStamp.
 type CheckSiteConfigChallenge struct {
@@ -58,8 +67,7 @@ func CheckSiteConfig(ctx context.Context, sitekey, host, v string) (string, erro
 	req.Header.Set("sec-fetch-mode", "cors")
 	req.Header.Set("sec-fetch-site", "same-site")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}

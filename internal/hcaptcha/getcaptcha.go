@@ -61,6 +61,11 @@ var getcaptchaURL = getcaptchaEndpoint
 // gcClient is the shared HTTP client for checksiteconfig and getcaptcha calls.
 var gcClient = &http.Client{Timeout: 60 * time.Second}
 
+// SetHTTPClient replaces the client used for checksiteconfig and getcaptcha
+// calls. cmd/serve uses it to route pure-Go PoW solving through the upstream
+// proxy. Must be called before solving starts.
+func SetHTTPClient(c *http.Client) { gcClient = c }
+
 // reP1Token matches an hCaptcha passcode anywhere in raw text. Tokens are
 // long opaque strings starting with "P1_" (base64url payloads with ".").
 var reP1Token = regexp.MustCompile(`P1_[A-Za-z0-9._~-]{20,}`)

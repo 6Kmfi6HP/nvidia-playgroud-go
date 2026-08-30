@@ -217,17 +217,15 @@ token, err := captcha.PowExtract()(ctx) // = hcaptcha.CaptchaToken(ctx, captcha.
 `serve` 嵌入 CLIProxyAPI 网关：内置翻译器把 Claude `/v1/messages` 与 OpenAI `/v1/responses` 转成 openai chat，再由 nvidia ProviderExecutor 注入 captcha / `nv-function-id` 并调用 predict。**不**配置网关 `api-keys`（入站无 Key 校验）。**每个 captcha token 只能用于一次上游请求。**
 
 ```bash
-# 纯 Go PoW 预热池（启动默认：pool=3 workers=1 coalesce=16ms，先预热再接流量；warm-timeout=3m）
+# 纯 Go PoW 池后台填充（启动默认：pool=3 workers=1 coalesce=16ms；首请求可能等待求解）
 go run ./cmd/serve -auto -addr :8080
 
-# 上游 API + 模型目录抓取走代理（也可设环境变量 CHROME_PROXY；无浏览器参与）
-go run ./cmd/serve -auto -chrome-proxy socks5://100.74.21.88:7890
+# 上游 API、模型目录抓取与纯 Go PoW 求解（checksiteconfig / hsw.js / getcaptcha）走代理
+# （也可设环境变量 CHROME_PROXY）
+go run ./cmd/serve -auto -proxy socks5://100.74.21.88:7890
 
 # 覆盖默认（实验脚本 scripts/ttft_sweep.sh）
 go run ./cmd/serve -auto -pool-size=2 -pool-workers=2 -coalesce-ms=0 -max-inflight=8
-
-# 跳过启动预热（不推荐：首请求 TTFT 会含整段 PoW 求解）
-go run ./cmd/serve -auto -warm-timeout=0
 
 # OpenAI Chat Completions
 curl http://localhost:8080/v1/chat/completions \
@@ -281,7 +279,7 @@ docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/glm52-nvidia-go:latest
 
 | 变量 | 作用 |
 |------|------|
-| `CHROME_PROXY` | 上游 API 与模型目录抓取共用代理（等同 `-chrome-proxy`），如 `socks5://host:port` |
+| `CHROME_PROXY` | 上游 API、模型目录抓取与纯 Go PoW 求解共用代理（等同 `-proxy`），如 `socks5://host:port` |
 | `HTTP_PROXY` / `HTTPS_PROXY` | 标准 Go 代理环境变量，同样作用于全部出站请求 |
 
 > 旧版文档中的 `CHROME_PATH` / `CHROMEDP_NO_SANDBOX` / `--shm-size=2g` 仅对已移除的 Chromium 方案有意义，镜像中已无浏览器，无需再设置。
