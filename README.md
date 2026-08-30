@@ -1,4 +1,4 @@
-# glm52-nvidia-go — NVIDIA Build Playground 多模型 Go 客户端 + 多格式网关
+# nvidia-playgroud-go — NVIDIA Build Playground 多模型 Go 客户端 + 多格式网关
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
@@ -44,7 +44,7 @@ curl http://localhost:8080/v1/models
 或直接跑已发布镜像（镜像内**不含** Chromium）：
 
 ```bash
-docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/glm52-nvidia-go:latest
+docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/nvidia-playgroud-go:latest
 ```
 
 ---
@@ -220,8 +220,9 @@ token, err := captcha.PowExtract()(ctx) // = hcaptcha.CaptchaToken(ctx, captcha.
 # 纯 Go PoW 池后台填充（启动默认：pool=3 workers=1 coalesce=16ms；首请求可能等待求解）
 go run ./cmd/serve -auto -addr :8080
 
-# 上游 API、模型目录抓取与纯 Go PoW 求解（checksiteconfig / hsw.js / getcaptcha）走代理
-# （也可设环境变量 CHROME_PROXY）
+# 纯 Go PoW 求解（checksiteconfig / hsw.js / getcaptcha）、模型目录抓取与 WAF token 走代理
+# （也可设环境变量 CHROME_PROXY）；predict API（buildapi.ngc.nvidia.com）延迟敏感，
+# 始终绕过代理直连，其余流量才走代理
 go run ./cmd/serve -auto -proxy socks5://100.74.21.88:7890
 
 # 模型目录：默认请求带 filters 的 NIM 预览列表（更多模型，40 候选）。该 URL
@@ -279,7 +280,7 @@ go run ./cmd/streambench -proxy http://localhost:8080 -concurrency 4 -max-tokens
 docker compose up --build
 
 # 或直接跑已发布镜像（GHCR）
-docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/glm52-nvidia-go:latest
+docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/nvidia-playgroud-go:latest
 ```
 
 健康检查：`GET /healthz`（容器 HEALTHCHECK 亦探活该路径）。反向代理流式接口时请关闭 buffering，并拉长 read timeout（建议 ≥120s；空 captcha 池时 serve 最多等 `-captcha-wait`，默认 30s 后返回 503，过短的代理超时会表现为客户端 504）。
@@ -288,7 +289,7 @@ docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/glm52-nvidia-go:latest
 
 | 变量 | 作用 |
 |------|------|
-| `CHROME_PROXY` | 上游 API、模型目录抓取与纯 Go PoW 求解共用代理（等同 `-proxy`），如 `socks5://host:port` |
+| `CHROME_PROXY` | PoW 求解、模型目录抓取与 WAF token 共用代理（等同 `-proxy`），如 `socks5://host:port`；predict API 始终直连 |
 | `HTTP_PROXY` / `HTTPS_PROXY` | 标准 Go 代理环境变量，同样作用于全部出站请求 |
 
 > 旧版文档中的 `CHROME_PATH` / `CHROMEDP_NO_SANDBOX` / `--shm-size=2g` 仅对已移除的 Chromium 方案有意义，镜像中已无浏览器，无需再设置。
@@ -298,7 +299,7 @@ docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/glm52-nvidia-go:latest
 推送 semver tag 后，GitHub Actions 会自动：
 
 1. 构建多平台 `serve` 二进制并创建 GitHub Release
-2. 推送多架构镜像到 `ghcr.io/6kmfi6hp/glm52-nvidia-go`（`v*` + `latest`）
+2. 推送多架构镜像到 `ghcr.io/6kmfi6hp/nvidia-playgroud-go`（`v*` + `latest`）
 
 ```bash
 git tag v0.1.0
@@ -310,7 +311,7 @@ git push origin v0.1.0
 ## 项目结构
 
 ```
-glm52-nvidia-go/
+nvidia-playgroud-go/
 ├── types.go              # 类型定义（ChatRequest、Message、Chunk 等，OpenAI-compatible）
 ├── client.go             # 客户端实现（hCaptcha token + SSE 流式，按 model 查表路由）
 ├── internal/captcha/     # token 预热池、纯 Go PoW 提取（pow.go）+ 遗留 chromedp 提取

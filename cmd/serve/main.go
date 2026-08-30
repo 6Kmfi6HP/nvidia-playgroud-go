@@ -69,7 +69,7 @@ func main() {
 	captchaWait := flag.Duration("captcha-wait", 30*time.Second, "max wait for a pooled captcha token per request (0=block until ready); then 503")
 	modelRefresh := flag.Duration("model-refresh", 6*time.Hour, "re-scrape build.nvidia.com for the playground model catalog on this interval (0=fetch once at startup; <0=keep the compiled-in snapshot)")
 	modelCache := flag.String("model-cache", "models_cache.json", "JSON cache file for the live model catalog: written after every successful refresh, loaded at startup so model ids are available before/without the first fetch (empty disables)")
-	proxy := flag.String("proxy", "", "proxy for upstream API, the pure-Go PoW solver and the model-catalog scraper (e.g. socks5://host:port); falls back to CHROME_PROXY")
+	proxy := flag.String("proxy", "", "proxy for the pure-Go PoW solver, model-catalog scraper and WAF token minting (e.g. socks5://host:port); the latency-sensitive predict API always dials direct; falls back to CHROME_PROXY")
 	catalogCookie := flag.String("catalog-cookie", "", "Cookie header (e.g. aws-waf-token=...) for the filtered build.nvidia.com model catalog; exported from a browser that passed the AWS WAF challenge")
 	flag.Parse()
 

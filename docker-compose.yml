@@ -4,7 +4,7 @@ services:
       context: .
       args:
         VERSION: ${VERSION:-dev}
-    image: glm52-nvidia-go:local
+    image: nvidia-playgroud-go:local
     ports:
       - "8080:8080"
     restart: unless-stopped
