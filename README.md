@@ -7,7 +7,7 @@
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI_Compatible-412991?logo=openai&logoColor=white)](#方式-3多格式本地代理cliproxyapi)
 [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker&logoColor=white)](#docker-部署)
 [![Status](https://img.shields.io/badge/Status-Reverse_Engineered-yellow)](#逆向分析报告)
-![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
+![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey)
 
 > **English:** A reverse-engineered Go client and multi-format reverse proxy for **NVIDIA Build Playground** (build.nvidia.com). It is **multi-model**: the registry seeds 11 anonymous playground models (DeepSeek, Kimi, MiniMax, Nemotron, …), refreshes the catalog at runtime by re-scraping the live SSR page, and routes every request to the matching predict endpoint with the per-model `nv-function-id`. hCaptcha credentials are minted by a **pure-Go PoW solver** (embedded V8, no browser), prewarmed into a token pool. The gateway embeds [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) to expose OpenAI Chat Completions, OpenAI Responses and Claude Messages, plus Docker deployments and SSE/latency benchmarks. Inbound gateway API keys are **not** enabled.
 >
@@ -298,8 +298,12 @@ docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/nvidia-playgroud-go:latest
 
 推送 semver tag 后，GitHub Actions 会自动：
 
-1. 构建多平台 `serve` 二进制并创建 GitHub Release
+1. 构建 `serve` 二进制（linux/amd64、linux/arm64、darwin/arm64，各在原生
+   runner 上 cgo 构建）并创建 GitHub Release
 2. 推送多架构镜像到 `ghcr.io/6kmfi6hp/nvidia-playgroud-go`（`v*` + `latest`）
+
+Windows / Intel-mac 二进制不发布：PoW 求解器内嵌的 V8（v8go）只提供
+linux/darwin/arm64 预编译库，且 cgo 无法交叉编译。
 
 ```bash
 git tag v0.1.0

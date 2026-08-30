@@ -27,23 +27,24 @@ env:
 jobs:
   binaries:
     name: Build binaries
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
+      # v8go (embedded V8 PoW solver) only ships prebuilt libv8 for
+      # linux/{amd64,arm64} and darwin/arm64, and cgo cannot cross-compile
+      # it: each target must be built natively on its own runner. Windows
+      # and darwin/amd64 binaries are not published for this reason.
       matrix:
         include:
-          - goos: linux
+          - os: ubuntu-latest
+            goos: linux
             goarch: amd64
-          - goos: linux
+          - os: ubuntu-24.04-arm
+            goos: linux
             goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-          - goos: windows
+          - os: macos-latest
+            goos: darwin
             goarch: arm64
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +68,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
+          CGO_ENABLED: "1"
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           mkdir -p dist

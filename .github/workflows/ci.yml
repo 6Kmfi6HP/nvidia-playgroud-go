@@ -38,21 +38,25 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
-          # v8go's inspector.h fails to compile under GCC 15's default C23
-          # (`typedef _Bool bool`); pin C17 for that toolchain only.
-          - os: windows-latest
-            cgo_flags: "-std=gnu17"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
       - name: Run tests
+        if: runner.os != 'Windows'
         run: go test -race -vet=all ./...
         env:
           SKIP_INTEGRATION_TESTS: "1"
-          CGO_CFLAGS: ${{ matrix.cgo_flags }}
+      # v8go ships no Windows prebuilt libv8 (only linux/darwin/android);
+      # the packages importing it cannot build on Windows. Test the
+      # client-facing core there; every other package is covered by the
+      # linux/macos legs of this matrix.
+      - name: Run tests (Windows core)
+        if: runner.os == 'Windows'
+        run: go test -race -vet=all ./ glm52-nvidia/internal/hcaptchapow glm52-nvidia/internal/models
+        env:
+          SKIP_INTEGRATION_TESTS: "1"
 
   vulncheck:
     name: Vulncheck
