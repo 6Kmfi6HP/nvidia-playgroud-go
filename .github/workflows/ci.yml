@@ -38,6 +38,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          # v8go's inspector.h fails to compile under GCC 15's default C23
+          # (`typedef _Bool bool`); pin C17 for that toolchain only.
+          - os: windows-latest
+            cgo_flags: "-std=gnu17"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -47,6 +52,7 @@ jobs:
         run: go test -race -vet=all ./...
         env:
           SKIP_INTEGRATION_TESTS: "1"
+          CGO_CFLAGS: ${{ matrix.cgo_flags }}
 
   vulncheck:
     name: Vulncheck
