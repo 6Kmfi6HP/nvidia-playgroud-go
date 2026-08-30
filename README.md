@@ -191,6 +191,25 @@ token, err := ExtractCaptchaToken(ctx)
 client := glm52.New(glm52.WithCaptchaToken(token))
 ```
 
+### 方式 3：纯 Go hCaptcha PoW 求解（内嵌 V8，无浏览器，实验）
+
+实验性的浏览器无关路径：v8go 内嵌 V8 运行官方 hsw.js 完成 PoW，产出 `P1_...` token（详见 `runs/hcaptcha-pow-go.md`）。
+
+```bash
+# 一键求解（默认 build.nvidia.com / NVIDIA sitekey）
+go run ./cmd/captchapow
+
+# 详细诊断：每阶段日志 + 明文变体响应
+go run ./cmd/captchapow -v
+
+# 自定义站点
+go run ./cmd/captchapow -sitekey <sitekey> -host <host>
+```
+
+各阶段（checksiteconfig → 指纹+挖矿 → hsw 求 n → 加密提交 getcaptcha → P1 token）全链路约 1s。
+新增包：`internal/hcaptchapow`（纯 Go 算法）、`internal/hsw`（v8go 运行器）、`internal/hcaptcha`（编排）。
+已知边界：当前入侵参数未含 motionData；上游 predict 还需刷新 `scripts/playground_models.json` 的 function-id 绑定。
+
 ## 模型信息
 
 | 属性 | 值 |
@@ -299,6 +318,10 @@ glm52-nvidia-go/
 ├── types.go              # 类型定义（ChatRequest、Message、Chunk 等）
 ├── client.go             # 客户端实现（hCaptcha token + SSE 流式，按 model 路由）
 ├── internal/captcha/     # 共享 Chrome、token 预热池、一次性提取
+├── internal/hcaptchapow/ # 纯 Go hCaptcha PoW 算法（JWT/stamp/CRC32/XXH64，零依赖）
+├── internal/hsw/         # v8go 内嵌 V8：运行官方 hsw.js 求 n / 加解密
+├── internal/hcaptcha/    # 无浏览器编排：指纹→n→getcaptcha→P1 token
+├── cmd/captchapow/       # 纯 Go PoW 求解 CLI（无浏览器）
 ├── internal/models/      # Playground 模型注册表（slug/namespace/function-id）
 ├── internal/provider/nvidia/  # CLIProxyAPI ProviderExecutor（captcha + predict）
 ├── cmd/example/          # 命令行示例（-smooth-ms 打字机输出）

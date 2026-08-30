@@ -1,0 +1,314 @@
+Home
+/
+Blog
+/
+hCaptcha's challenge pipeline: from sitekey to passcode and the proof-of-work layer
+hCaptcha's challenge pipeline: from sitekey to passcode and the proof-of-work layer
+Daniel Mercer
+Sat, May 9, 2026
+·
+21 min read
+Copyright:
+MIT
+hcaptcha
+captcha
+anti-bot
+proof-of-work
+You drop a div on a page, give it a sitekey, and load one script. A visitor checks a box, or sometimes does not even do that, and a hidden field fills with a long opaque string. You post that string to your backend, your backend asks hCaptcha whether it is real, and you get back
+success: true
+. That is the whole integration surface, and it is deliberately tiny. Almost everything that matters happens in the gap between the click and the string, inside a WebAssembly module that hCaptcha never documents and rotates faster than anyone can keep a stable description of.
+So the interesting question is not how to integrate hCaptcha. The docs cover that in ten minutes. The interesting question is what travels through that gap: what the widget fetches when it wakes up, what computation it has to perform before hCaptcha will hand it a passcode, what that passcode actually proves, and why a chunk of the work is a proof-of-work stamp that has nothing to do with whether you can recognise a bus. This post walks the pipeline in the order a request travels it.
+A word on sourcing, because hCaptcha sits on the line between documented and reverse-engineered. The integration surface is public: the sitekey, the
+h-captcha-response
+field name, the
+https://api.hcaptcha.com/siteverify
+endpoint and its parameters, the token lifetime. Those come from hCaptcha’s own developer docs and are quoted as such. The internals, the
+getcaptcha
+request body, the
+hsw
+proof-of-work, the encrypted
+n
+and
+c
+fields, the obfuscated motion VM, are not documented by hCaptcha. What this post says about them is inferred from observed traffic and from public reverse-engineering write-ups, and every time the post crosses that line it says so. Where a field name appears, it is one that researchers have observed on the wire, not one I invented. The protocol that the Privacy Pass path leans on is specified in public RFCs, and those are cited directly.
+The sections follow the request. First the sitekey and the script that the page loads. Then
+getcaptcha
+, the call that fetches a challenge and the configuration around it. Then the proof-of-work layer, the part of the pipeline that is pure compute. Then the passcode itself, what
+h-captcha-response
+carries and how
+siteverify
+redeems it. Then the Privacy Pass path, where the challenge is replaced by a blindly signed token. Then a closing look at why hCaptcha built the thing this way and where the design strains.
+The sitekey and the script
+hCaptcha’s footprint on your page is two things. A container element with the class
+h-captcha
+and a
+data-sitekey
+attribute, and one script tag pointing at
+https://js.hcaptcha.com/1/api.js
+. When the script loads it finds every
+h-captcha
+container, reads the sitekey, and renders a widget into it. That is the documented surface and it has not changed in years.
+The sitekey is public by design. It identifies your widget configuration to hCaptcha, the difficulty setting, the theme, whether the widget is visible or invisible, and it pairs with a secret key that lives only on your server and never touches the browser. The docs are explicit that the sitekey alone proves nothing: passing the sitekey to
+siteverify
+is recommended precisely because “it will prevent tokens issued on one sitekey from being redeemed elsewhere.” A passcode is scoped to the sitekey that produced it. Lift a token from one site and it will not validate against another’s secret.
+That
+js.hcaptcha.com/1/api.js
+script is not the interesting code. It is a loader. Its job is to set up the widget shell and then pull the real machinery from a second host,
+newassets.hcaptcha.com
+, which serves the challenge frontend and, critically, the WebAssembly module that does the heavy lifting. Pinning the loader to a live origin is the same trick every modern anti-bot vendor uses. The logic is not static, so the vendor can rotate it server-side without your cooperation, and anyone who caches or proxies the script ends up running stale code that breaks on the next rotation. hCaptcha rotates the obfuscation on its WASM aggressively, which is why no public description of the internal field layout stays accurate for long.
+There are two ways the widget runs. In the normal visible mode the visitor sees the checkbox and clicks it. In invisible mode there is no checkbox; the host page calls
+hcaptcha.execute()
+(or the React component’s
+execute()
+) at the moment it wants verification, typically on form submit, and the challenge runs without a visible affordance. The hCaptcha FAQ describes a typical client-side interaction as lasting three to ten seconds depending on the difficulty mode. Most of that is not you looking at pictures. Most of it is the pipeline below.
+getcaptcha: fetching a challenge
+When the widget activates, it does not immediately show you a grid of images. It first asks hCaptcha for a challenge. The request goes to an endpoint on
+hcaptcha.com
+that researchers consistently label
+getcaptcha
+(the precise path has carried a version prefix that shifts over time, so treat the path as a moving target and the behaviour as the stable part). The body of that request is where the first round of signal collection lands.
+The exact field layout of the
+getcaptcha
+body is not published by hCaptcha. What follows is inferred from observed traffic and public reverse-engineering notes. The request carries the
+sitekey
+, the
+host
+the widget is running on, and a payload of encrypted fields. Two field names recur across independent write-ups: an
+n
+field and a
+c
+field. The
+c
+field is the challenge state, a small JSON object that names the challenge type and carries the parameters the client needs to do its work. The
+n
+field is the answer to that challenge, the value the client computes and sends back. In the proof-of-work case,
+n
+is the stamp. Both are wrapped: reverse-engineering notes describe AES-128-CBC encryption applied on the JavaScript side to the request and response payloads, with additional AES-256-GCM layers inside the WASM. None of that encryption is a secret in the cryptographic sense. It is obfuscation, meant to raise the cost of building a client that speaks the protocol without running hCaptcha’s own code.
+Alongside the challenge fields, the
+getcaptcha
+body carries the behavioural telemetry. hCaptcha’s own FAQ admits the system “analyzes visitor behavior based on various characteristics” naming IP address, time on site, and mouse movements. On the wire this shows up as motion data: timestamped pointer paths, the timing of the click on the checkbox, key and touch events. Researchers have noted that this motion data passes through an obfuscated virtual machine inside the WASM before it is sent, which is the same anti-instrumentation reflex you see in Kasada and Akamai. The point of the VM is to make the telemetry expensive to forge. A bot that wants to submit plausible motion data cannot just fill in a JSON object; it has to either run the VM or reimplement it, and the VM changes under it.
+The path from sitekey to passcode
+Browser
+api.js + WASM
+hCaptcha
+getcaptcha
+Your backend
+holds secret
+sitekey, host
+challenge + hsw job
+1. Widget fetches a challenge. Response includes a proof-of-work request (hsw) with a difficulty.
+2. WASM computes the hsw stamp + collects motion data, encrypts both into the answer fields.
+3. hCaptcha verifies the stamp and (if asked) the image answers, then issues a passcode.
+passcode lands in the hidden field
+h-captcha-response
+posted with form
+4. Backend posts passcode + secret to siteverify. hCaptcha redeems it once, returns success + a timestamp.
+*The widget fetches a challenge, does the work, and earns a passcode; the backend redeems that passcode at siteverify. The image puzzle, when it appears at all, is one branch of step 2, not the whole story.*
+The image puzzle, the part everyone thinks of as “the captcha,” is one possible challenge type that
+getcaptcha
+can hand back. hCaptcha is explicit that “challenge does not automatically mean visual challenge.” When the system already has enough confidence in your humanity, from the behavioural signals and the IP reputation and whatever else it weighs, it can issue a passcode after the invisible work alone. Reload the same widget fast enough and you push the confidence down, and the visual grid appears. The grid is a fallback, triggered when the cheap signals are not enough. The hCaptcha docs describe four difficulty levels for standard accounts, easy through difficult plus auto, and the difficulty governs how readily the system escalates to a visible puzzle and how hard that puzzle is.
+For the difference in how hCaptcha and Google approach this same decision, the comparison in
+hCaptcha vs reCAPTCHA
+is the companion piece. The short version is that both compute a confidence judgement before deciding what to show, but they collect different signals and monetise the result differently.
+The proof-of-work layer
+Here is the part of the pipeline that has nothing to do with image recognition and everything to do with cost. hCaptcha calls it
+hsw
+. The challenge response from
+getcaptcha
+includes a proof-of-work request, and the client has to solve it before hCaptcha will accept the rest of the submission. This is the layer the post title points at, so it is worth being precise about what it is and what it is not.
+Proof-of-work as an anti-bot tool is hashcash, the scheme Adam Back proposed in 1997 to make email spam expensive. The idea is asymmetric cost. The client must find an input whose hash has some required number of leading zero bits, which means trying a great many inputs because a good hash function gives you no shortcut. The server checks the answer with a single hash. Minting is expensive, verifying is nearly free, and the gap between the two is the entire mechanism. A legitimate user pays the cost once and never notices. An operation running a million sessions pays it a million times.
+Reverse-engineering notes on hCaptcha’s
+hsw
+describe exactly this shape. The WASM runs a hashcash-style search to produce a stamp, with the difficulty (the number of required bits) carried in the challenge, observed in some versions inside a JWT that the challenge response delivers. The harder hCaptcha wants to make a given client work, the more bits it demands, and because each extra bit roughly doubles the expected number of hashes, the cost climbs geometrically while the integration code stays the same. This is the lever hCaptcha pulls when it suspects automation: it does not have to block you outright, it can just make your next thousand requests cost real compute.
+Each extra bit doubles the client's work; the server still checks one hash
+0
+10 bits
+12 bits
+14 bits
+16 bits
+~65k hashes
+verify
+1 hash
+Bar heights are illustrative of the doubling, not measured difficulty values from a live challenge.
+*The proof-of-work tax scales geometrically for the minter and stays constant for the verifier. hCaptcha raises the bit count on traffic it distrusts rather than blocking it outright.*
+Two design choices in hCaptcha’s proof-of-work deserve a note. First, the hash function. Plain hashcash uses SHA-256, which is exactly what a GPU or ASIC eats for breakfast, so a SHA-256 proof-of-work taxes a phone far more than it taxes a miner farm. Public discussion of proof-of-work captchas, including hCaptcha’s lineage, points at scrypt as the memory-hard alternative: scrypt was designed to be expensive in memory as well as time, which narrows the gap between a browser and dedicated hardware. The general principle, which the broader proof-of-work survey in
+the proof-of-work renaissance
+covers across vendors, is that a memory-hard function is the only kind that makes the tax fall roughly evenly on attacker and defender. Whether a given hCaptcha challenge uses scrypt or a SHA variant has shifted across versions, and the exact function in the current WASM is not something I will state from memory.
+Second, and this is the honest limit of proof-of-work as a defence, the tax does not distinguish a human from a bot. It only prices compute. A determined operator with cheap hardware, or a botnet running on hijacked devices where the electricity is someone else’s problem, pays a tax that rounds to zero. The proof-of-work survey work on hCaptcha-style schemes is blunt about this: the mechanism “does not attempt to distinguish humans from bots” but rather “undermines the economic incentive for large-scale attacks.” It is a cost floor, not a gate. That is why
+hsw
+is one layer of the pipeline and not the whole thing. The behavioural signals, the IP reputation, the optional image challenge, and the proof-of-work all stack, and the proof-of-work’s job is specifically to make the cheap path, mass automation, less cheap.
+The passcode and siteverify
+Once the client has done the work, fetched the challenge, computed the
+hsw
+stamp, gathered the motion data, and solved the image grid if one was shown, hCaptcha issues a passcode. This is the
+h-captcha-response
+value. The widget drops it into a hidden form field, and the React and vanilla APIs surface it through
+getResponse()
+or the
+onVerify
+callback, which also hands back an
+eKey
+that hCaptcha describes as a session id.
+The passcode itself is opaque. From the integration side you treat it as a bearer token and never parse it. What it encodes is not documented, and inferring its internal structure from the outside is guesswork; what is documented is its behaviour, and the behaviour is what matters. It is scoped to the sitekey. It is single-use. And it expires fast. The hCaptcha docs put the default lifetime at 120 seconds, after which
+siteverify
+will reject it. The React component’s docs hammer the single-use point: “Passcodes are one-time use,” and you must reset the widget after submitting so a stale passcode is not reused.
+Redemption is the only step that actually decides anything, and it happens server-side. Your backend takes the
+h-captcha-response
+it received and posts it to
+https://api.hcaptcha.com/siteverify
+as a URL-encoded form, never JSON, with two required parameters:
+secret
+, your account secret key, and
+response
+, the passcode. Two optional parameters sharpen the check:
+remoteip
+, the visitor’s IP, and
+sitekey
+, the sitekey you expect, which is the parameter that stops a passcode minted for one site being replayed against another. hCaptcha redeems the passcode, marks it spent, and returns a JSON verdict.
+That verdict carries a
+success
+boolean, a
+challenge_ts
+timestamp marking when the challenge was solved, the
+hostname
+the challenge ran on, and an
+error-codes
+array when something is wrong. The structural detail worth keeping in mind: the browser never holds the secret key, and the verdict is decided by hCaptcha’s servers, not by anything the client can assert. Everything the client sends is an input to a decision made elsewhere. This is the same client-side-collects, server-side-decides split that every serious anti-bot vendor uses, and the general shape of why the decision lives on the server is covered in
+server-side vs client-side bot detection
+.
+Enterprise accounts, the tier hCaptcha markets as BotStop, get more out of the same
+siteverify
+call. The response gains a
+score
+, a risk number, and a
+score_reason
+array explaining it, which moves hCaptcha from a pass/fail gate toward the graded risk signal that reCAPTCHA Enterprise and the others sell. The free tier gives you a boolean; the paid tier gives you a number and a justification. The reason-code idea, a machine-readable explanation alongside the score, mirrors what Google ships, and the parallel is drawn out in
+reCAPTCHA Enterprise
+. The economics of why the graded signal sits behind the paywall, and a boolean does not, are the subject of
+the economics of anti-bot vendors
+.
+A practical note for anyone reasoning about replay. Because the passcode is single-use and expires in two minutes and is bound to the sitekey, the window for lifting and reusing one is narrow on its own. The defence does not rest on the token being unguessable; it rests on the token being cheap to invalidate. Redeem it once and it is dead. That is a deliberately simple property to reason about, and it is the same property Turnstile and reCAPTCHA build on.
+The Privacy Pass path
+There is a second way to satisfy an hCaptcha challenge that skips the puzzle entirely, and it is the most cryptographically interesting part of the system. It is Privacy Pass. hCaptcha was the first captcha service to ship it, and the idea is to let a user prove they already cleared a challenge without that proof being linkable back to the moment they cleared it.
+The flow has two phases. In the issuance phase, a user solves one or more hCaptcha challenges and, in return, earns a batch of tokens, blindly signed passes. In the redemption phase, when a site protected by hCaptcha later wants to verify the user’s humanity, the browser spends one of those tokens instead of solving a fresh challenge. The user sails through, and here is the cryptographic payoff: hCaptcha cannot link the redeemed token to the issuance event that produced it. The signing is blind. hCaptcha signs something it cannot read, and when the token comes back it can verify its own signature without recognising which signing session it came from.
+The unlinkability comes from the blind-signature construction. hCaptcha’s own description points at the protocol being standardised at the IETF, built originally on Verifiable Oblivious Pseudorandom Functions over elliptic curves. The math is the same family Cloudflare wrote up when it rebuilt Privacy Pass as v3: a partially-oblivious PRF where the client blinds a value, the issuer signs the blinded value, and the client unblinds the result to get a token the issuer will accept but cannot trace. That standardisation finished. As of June 2024, Privacy Pass is three RFCs: RFC 9576 for the architecture, RFC 9577 for the HTTP authentication scheme, and RFC 9578 for the issuance protocols.
+Why the issuer cannot link the token it signed to the token it sees
+CLIENT
+hCaptcha (issuer)
+solve challenge
+blind(t) = T'
+send blinded T'
+sign(T') = S'
+never sees t
+return signed S'
+unblind(S') = S
+token = (t, S)
+later: redeem (t, S)
+issuer verifies its own signature on t, but t never crossed the wire unblinded before now
+*The blinding is the whole trick. The issuer signs a value it cannot read, so the signed token it later verifies carries no link back to the session that issued it.*
+RFC 9578 defines the token types you actually meet on the wire, and the two that matter here split along a clean line. Token type
+0x0001
+is the privately verifiable variant, VOPRF over the P-384 curve with SHA-384, where only the issuer can check the token because verification needs the issuer’s private key. Token type
+0x0002
+is the publicly verifiable variant, built on 2048-bit blind RSA signatures (the RFC names the RSABSSA-SHA384-PSS-Deterministic scheme), where anyone with the issuer’s public key can verify. That second type is the one behind Apple’s Private Access Tokens.
+hCaptcha shipped Private Access Token support in June 2022, ahead of the RFCs being finalised. The pitch is the cleanest version of the privacy argument: on a recent iPhone or iPad running iOS 16.2 or later, or a recent Mac on current Safari, the device can attest to hardware properties and have Apple sign a token over the blind-RSA path, and hCaptcha can accept that token in place of a challenge. The attestation gives “some additional assurance that the user is actually running on a real phone, without uniquely identifying that phone to hCaptcha in the process.” A real device, proven, without the device being named.
+hCaptcha is unusually honest about the limit. Its own announcement calls Private Access Tokens “a limited, partial solution,” and the reason is structural: a token attests that some device passed an attestation check, and an attacker’s device passes that check exactly as easily as a legitimate user’s. The token proves “real hardware,” not “good intent.” So the challenge does not go away; the token path is an accelerator for the easy cases and the puzzle stays as the fallback for everything that cannot, or will not, present a token. The same Privacy Pass machinery, and the same honest limit, sits under Turnstile, and the cookie-free side of it is detailed in
+Cloudflare Turnstile internals
+.
+One operational footnote. hCaptcha ran a standalone Privacy Pass browser extension during the earlier OPRF era, and that extension was deprecated on November 1, 2023. The capability did not leave; it moved into native browser and OS support, which is where Private Access Tokens live now. An extension you had to install was never going to reach scale. Support baked into Safari does.
+What the pipeline is really for
+Step back from the field names and the pipeline has a clear shape. The visible puzzle is the least important part of it. It is a fallback that fires when the cheaper signals leave hCaptcha unsure, and on a lot of traffic it never fires at all. The work that always happens is the invisible work: the behavioural telemetry pushed through an obfuscated VM, the proof-of-work stamp that prices compute, the IP and history that feed the confidence judgement before a single image loads. The passcode at the end is just a receipt that all of that ran and hCaptcha was satisfied.
+The proof-of-work layer is the piece that gives the system its character, and it is worth being clear-eyed about what it buys. It does not detect bots. It cannot. A hashcash stamp from a headless browser on a rented GPU is indistinguishable from one minted by a phone, and a botnet running on stolen cycles pays nothing it values. What proof-of-work does is move the contest onto ground where hCaptcha can adjust the price continuously and silently, bit by bit, on exactly the traffic it distrusts, without ever showing a block page or a puzzle. That is a more useful lever than a binary gate, and it is why proof-of-work keeps reappearing across this whole class of product even though everyone involved knows it does not, on its own, tell humans from machines.
+The Privacy Pass path is the genuinely new idea in the stack, and its fate will not be decided by cryptography. The math works; RFC 9578 is done. What it needs is for enough devices to carry attestation hardware and enough issuers to be trusted that redeeming a token is the common case and solving a puzzle is the exception. hCaptcha bet on that early, in 2022, before the RFCs existed, and the bet is still open. If it pays off, the most cryptographically careful part of the pipeline ends up being the part most users never see, because the whole point of a blind signature is that there is nothing to look at.
+Sources & further reading
+hCaptcha (2024),
+Developer Guide
+— the documented integration surface: the
+h-captcha
+container,
+data-sitekey
+, the
+siteverify
+endpoint and its
+secret
+/
+response
+/
+sitekey
+/
+remoteip
+parameters, and the response fields.
+hCaptcha (2024),
+Frequently Asked Questions
+— confirms the behavioural signals collected, the four difficulty levels, the three-to-ten-second interaction window, and that “challenge” does not mean “visual challenge.”
+hCaptcha (2024),
+react-hcaptcha component library
+— documents
+execute()
+, the
+onVerify
+token and
+eKey
+,
+onExpire
+, and the “passcodes are one-time use” reset requirement.
+hCaptcha (2022),
+Announcing Support for Private Access Tokens
+— the June 2022 launch, iOS 16.2/Safari requirement, the device-attestation mechanism, and the candid “limited, partial solution” caveat.
+hCaptcha (2023),
+hCaptcha + Privacy Pass
+— the issuance/redemption model, the OPRF basis for unlinkability, and the November 1, 2023 deprecation of the standalone extension.
+IETF (2024),
+RFC 9576: The Privacy Pass Architecture
+— the overall model for privacy-preserving authentication where the relying party learns no per-client identifier.
+IETF (2024),
+RFC 9578: Privacy Pass Issuance Protocols
+— defines token type
+0x0001
+(VOPRF, P-384/SHA-384, privately verifiable) and
+0x0002
+(2048-bit blind RSA, publicly verifiable), the basis for Private Access Tokens.
+Cloudflare (2021),
+Privacy Pass v3: the new privacy bits
+— the partially-oblivious PRF rebuild, the modular provider model that names hCaptcha, and a plain account of token unlinkability.
+Implex (2023),
+hcaptcha-reverse
+— a reverse-engineering write-up describing the observed
+n
+/
+c
+/
+sitekey
+/
+host
+/
+motionData
+fields, the AES obfuscation layers, and the hashcash-style
+hsw
+proof-of-work with JWT-carried difficulty.
+Kevnu (2024),
+Proof-of-Work CAPTCHA: Principle and Implementation Analysis
+— the economics of proof-of-work captchas: the solve-versus-verify asymmetry, difficulty scaling, and the botnet/ASIC limits.
+Apple (2022),
+Replace CAPTCHAs with Private Access Tokens
+— the WWDC22 session describing device attestation and the blind-RSA token path that hCaptcha consumes.
+Further reading
+hCaptcha vs reCAPTCHA: a technical comparison of detection and challenge design
+A head-to-head technical comparison of hCaptcha and reCAPTCHA: how each scores traffic, where their score scales invert, the image-challenge design, the privacy split, and the 2020-era migrations that put hCaptcha on millions of sites.
+Fri, May 8, 2026
+·
+20 min read
+Cloudflare Turnstile internals: the challenge token, siteverify, and what it measures
+Traces how Cloudflare Turnstile works end to end: the widget script, the challenge token it issues, the siteverify server check, the browser signals it gathers in place of a puzzle, and its cookie-free privacy posture.
+Tue, May 26, 2026
+·
+24 min read
+Cloudflare's managed challenge vs JS challenge vs interactive challenge
+Traces Cloudflare's challenge taxonomy: the JS (non-interactive) challenge, the managed challenge, the deprecated interactive challenge, and the retired CAPTCHA, when each fires, what each measures, and how the clearance levels differ.
+Sat, May 23, 2026
+·
+21 min read
+← Previous blog
+hCaptcha vs reCAPTCHA: a technical comparison of detection and challenge design
+Next blog →
+Hardware concurrency and device memory: the navigator hardware tells
