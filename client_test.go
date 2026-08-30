@@ -28,14 +28,18 @@ func TestBuildRequestUsesCaptchaAuthentication(t *testing.T) {
 	if req.Method != http.MethodPost {
 		t.Errorf("method = %q, want %q", req.Method, http.MethodPost)
 	}
-	if req.URL.String() != PredictEndpoint {
-		t.Errorf("URL = %q, want %q", req.URL.String(), PredictEndpoint)
+	info, err := models.Lookup(DefaultModel)
+	if err != nil {
+		t.Fatalf("models.Lookup(%q) error = %v", DefaultModel, err)
+	}
+	if req.URL.String() != info.PredictEndpoint() {
+		t.Errorf("URL = %q, want %q", req.URL.String(), info.PredictEndpoint())
 	}
 
 	wantHeaders := map[string]string{
 		"Content-Type":     "application/json",
 		"Accept":           "text/event-stream",
-		"nv-function-id":   NVFunctionID,
+		"nv-function-id":   info.FunctionID,
 		"nv-captcha-token": "test-captcha-token",
 		"Origin":           "https://build.nvidia.com",
 		"Referer":          "https://build.nvidia.com/",
@@ -182,8 +186,12 @@ func TestBuildRequestAppliesFunctionPin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
-	if httpReq.URL.String() != PredictEndpoint {
-		t.Errorf("URL = %q, want the pinned model's endpoint %q", httpReq.URL.String(), PredictEndpoint)
+	info, err := models.Lookup(DefaultModel)
+	if err != nil {
+		t.Fatalf("models.Lookup(%q) error = %v", DefaultModel, err)
+	}
+	if httpReq.URL.String() != info.PredictEndpoint() {
+		t.Errorf("URL = %q, want the pinned model's endpoint %q", httpReq.URL.String(), info.PredictEndpoint())
 	}
 	if got := httpReq.Header.Get("nv-function-id"); got != pinned {
 		t.Errorf("nv-function-id = %q, want %q", got, pinned)

@@ -27,6 +27,7 @@ import (
 
 	glm52 "glm52-nvidia"
 	"glm52-nvidia/internal/captcha"
+	"glm52-nvidia/internal/models"
 )
 
 func main() {
@@ -49,7 +50,11 @@ func main() {
 		log.Fatal("-concurrency > 1 requires -proxy (local serve pool handles captchas)")
 	}
 
-	endpoint := glm52.PredictEndpoint
+	info, err := models.Lookup(models.DefaultModel)
+	if err != nil {
+		log.Fatal(err)
+	}
+	endpoint := info.PredictEndpoint()
 	if *proxy != "" {
 		endpoint = strings.TrimRight(*proxy, "/") + "/v1/chat/completions"
 	}
@@ -79,7 +84,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		runOne(ctx, endpoint, body, token, *proxy != "")
+		runOne(ctx, endpoint, info.FunctionID, body, token, *proxy != "")
 		return
 	}
 
@@ -108,9 +113,9 @@ type runResult struct {
 	Err    string
 }
 
-func runOne(ctx context.Context, endpoint string, body []byte, token string, viaProxy bool) {
+func runOne(ctx context.Context, endpoint, functionID string, body []byte, token string, viaProxy bool) {
 	start := time.Now()
-	resp, err := doStream(ctx, endpoint, body, token, viaProxy)
+	resp, err := doStream(ctx, endpoint, functionID, body, token, viaProxy)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -138,7 +143,7 @@ func runConcurrent(ctx context.Context, endpoint string, body []byte, n int) {
 		go func(i int) {
 			defer wg.Done()
 			start := time.Now()
-			resp, err := doStream(ctx, endpoint, body, "", true)
+			resp, err := doStream(ctx, endpoint, "", body, "", true)
 			if err != nil {
 				results[i] = runResult{Idx: i, Err: err.Error(), Total: time.Since(start)}
 				return
@@ -192,7 +197,7 @@ func runConcurrent(ctx context.Context, endpoint string, body []byte, n int) {
 	}
 }
 
-func doStream(ctx context.Context, endpoint string, body []byte, token string, viaProxy bool) (*http.Response, error) {
+func doStream(ctx context.Context, endpoint, functionID string, body []byte, token string, viaProxy bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -200,7 +205,7 @@ func doStream(ctx context.Context, endpoint string, body []byte, token string, v
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	if !viaProxy {
-		req.Header.Set("nv-function-id", glm52.NVFunctionID)
+		req.Header.Set("nv-function-id", functionID)
 		req.Header.Set("nv-captcha-token", token)
 		req.Header.Set("Origin", "https://build.nvidia.com")
 		req.Header.Set("Referer", "https://build.nvidia.com/")

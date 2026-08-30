@@ -169,14 +169,6 @@ const (
 	// z-ai/glm-5.2 was removed from NVIDIA's anonymous catalog in 2026-08).
 	DefaultModel = "moonshotai/kimi-k3"
 
-	// PredictEndpoint is the reverse-engineered Playground API endpoint
-	// (buildapi gateway used since 2026-08; api.ngc.nvidia.com 404s now).
-	PredictEndpoint = "https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/kimi-k3"
-
-	// NVFunctionID is the static NVCF function identifier for the default
-	// model.
-	NVFunctionID = "1586112a-925c-48af-8631-7c815dbd749c"
-
 	defaultMaxTokens = 16384
 	defaultSeed      = 42
 	defaultTemp      = 1.0
