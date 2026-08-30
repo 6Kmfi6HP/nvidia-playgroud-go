@@ -847,7 +847,11 @@ func TestPreparePayloadFunctionPin(t *testing.T) {
 		name         string
 		model        string
 		headerPin    string
+		headerSlug   string
+		headerNS     string
 		wantFunction string
+		wantSlug     string
+		wantNS       string
 		wantBody     string
 		wantErr      string
 	}{
@@ -892,9 +896,42 @@ func TestPreparePayloadFunctionPin(t *testing.T) {
 			wantErr:      "nv-function-id",
 		},
 		{
-			name:    "unknown pinned model reports the bare id",
-			model:   pinnedFunction + "@acme/not-in-registry",
-			wantErr: "unknown model: acme/not-in-registry",
+			name:         "pinned unlisted model synthesizes the target",
+			model:        pinnedFunction + "@qwen3.8-2.4t-a95b",
+			wantFunction: pinnedFunction,
+			wantSlug:     "qwen3.8-2.4t-a95b",
+			wantBody:     "qwen3.8-2.4t-a95b",
+		},
+		{
+			name:         "publisher/ slug ref keeps only the slug",
+			model:        pinnedFunction + "@qwen/qwen3.8-2.4t-a95b",
+			wantFunction: pinnedFunction,
+			wantSlug:     "qwen3.8-2.4t-a95b",
+			wantBody:     "qwen/qwen3.8-2.4t-a95b",
+		},
+		{
+			name:         "header slug + function id synthesize the target",
+			model:        "moonshotai/kimi-k3",
+			headerPin:    pinnedFunction,
+			headerSlug:   "qwen3.8-2.4t-a95b",
+			headerNS:     "customns",
+			wantFunction: pinnedFunction,
+			wantSlug:     "qwen3.8-2.4t-a95b",
+			wantNS:       "customns",
+			wantBody:     "qwen3.8-2.4t-a95b",
+		},
+		{
+			name:       "header slug without a function id is a client error",
+			model:      "moonshotai/kimi-k3",
+			headerSlug: "qwen3.8-2.4t-a95b",
+			wantErr:    "nv-function-id",
+		},
+		{
+			name:       "invalid header slug is a client error",
+			model:      "moonshotai/kimi-k3",
+			headerPin:  pinnedFunction,
+			headerSlug: "bad slug",
+			wantErr:    "nv-function-slug",
 		},
 		{
 			name:    "empty pinned model is a client error",
@@ -907,7 +944,13 @@ func TestPreparePayloadFunctionPin(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			headers := http.Header{}
 			if tc.headerPin != "" {
-				headers.Set("nv-function-id", tc.headerPin)
+				headers.Set(headerFunctionID, tc.headerPin)
+			}
+			if tc.headerSlug != "" {
+				headers.Set(headerFunctionSlug, tc.headerSlug)
+			}
+			if tc.headerNS != "" {
+				headers.Set(headerFunctionNamespace, tc.headerNS)
 			}
 			body, info, err := e.preparePayload(clipexec.Request{
 				Model:   tc.model,
@@ -932,6 +975,12 @@ func TestPreparePayloadFunctionPin(t *testing.T) {
 			}
 			if info.FunctionID != tc.wantFunction {
 				t.Fatalf("function id = %q, want %q", info.FunctionID, tc.wantFunction)
+			}
+			if tc.wantSlug != "" && info.Slug != tc.wantSlug {
+				t.Fatalf("slug = %q, want %q", info.Slug, tc.wantSlug)
+			}
+			if tc.wantNS != "" && info.Namespace != tc.wantNS {
+				t.Fatalf("namespace = %q, want %q", info.Namespace, tc.wantNS)
 			}
 			var probe struct {
 				Model string `json:"model"`

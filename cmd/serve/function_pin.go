@@ -19,9 +19,16 @@ package main
 //
 // The body pin wins over a header pin when both are sent, because it names the
 // target in the same field that selects the model.
+//
+// A pinned model the registry does not list (functions NVIDIA serves without
+// a playground page) is not rejected: the middleware rewrites the body model
+// to the gateway's registered default so cliproxy can route the request, and
+// carries the real target in the nv-function-id + nv-function-slug headers.
+// The executor then synthesizes the predict target from the headers.
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -35,8 +42,15 @@ import (
 )
 
 // functionIDHeader is the NVCF function header: accepted inbound, rewritten
-// from a body pin, and read by the nvidia executor.
-const functionIDHeader = "nv-function-id"
+// from a body pin, and read by the nvidia executor. functionSlugHeader names
+// the predict slug for pinned targets the registry does not list (set by this
+// middleware from an unknown "<pin>@<model>" or directly by clients);
+// functionNamespaceHeader optionally overrides the shared namespace.
+const (
+	functionIDHeader        = "nv-function-id"
+	functionSlugHeader      = "nv-function-slug"
+	functionNamespaceHeader = "nv-function-namespace"
+)
 
 // pinnablePaths are the JSON chat endpoints whose request body carries a
 // top-level "model" field. Model listings, uploads and websocket upgrades are
@@ -80,7 +94,7 @@ func functionPinMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		body, pin, perr := applyFunctionPin(raw, strings.TrimSpace(req.Header.Get(functionIDHeader)))
+		body, pin, slug, perr := applyFunctionPin(raw, strings.TrimSpace(req.Header.Get(functionIDHeader)))
 		if perr != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, sdkginhandlers.ErrorResponse{
 				Error: sdkginhandlers.ErrorDetail{Message: perr.Error(), Type: "invalid_request_error"},
@@ -90,33 +104,50 @@ func functionPinMiddleware() gin.HandlerFunc {
 		if pin != "" {
 			req.Header.Set(functionIDHeader, pin)
 		}
+		if slug != "" {
+			req.Header.Set(functionSlugHeader, slug)
+		}
 		req.Body = io.NopCloser(bytes.NewReader(body))
 		req.ContentLength = int64(len(body))
 		c.Next()
 	}
 }
 
-// applyFunctionPin returns the body to serve plus the function id to publish.
-// An empty pin means "nothing to pin" and body is raw, unchanged.
-func applyFunctionPin(raw []byte, headerPin string) (body []byte, pin string, err error) {
+// applyFunctionPin returns the body to serve, the function id to publish in
+// the nv-function-id header, and — for pinned targets the registry does not
+// list — the slug ref to publish in nv-function-slug. An empty pin means
+// "nothing to pin" and body is raw, unchanged.
+func applyFunctionPin(raw []byte, headerPin string) (body []byte, pin, slug string, err error) {
 	pin, base, hasPin := models.SplitFunctionRef(gjson.GetBytes(raw, "model").String())
 	if !hasPin {
 		if headerPin != "" && !models.ValidFunctionID(headerPin) {
-			return raw, "", models.InvalidFunctionIDError(headerPin)
+			return raw, "", "", models.InvalidFunctionIDError(headerPin)
 		}
-		return raw, "", nil
+		return raw, "", "", nil
 	}
 	if err := models.ValidateFunctionRef(pin, base); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
-	if _, err := models.Lookup(base); err != nil {
-		return nil, "", err
+	if _, err := models.Lookup(base); err == nil {
+		// Registered model: plain pin; the real model id still routes.
+		rewritten, serr := sjson.SetBytes(raw, "model", base)
+		if serr != nil {
+			return nil, "", "", serr
+		}
+		return rewritten, pin, "", nil
 	}
-	rewritten, err := sjson.SetBytes(raw, "model", base)
+	// Unlisted pinned target: cliproxy can only route registered models, so
+	// the body carries the gateway default and the real target travels in the
+	// nv-function-id / nv-function-slug headers. The executor synthesizes the
+	// model info from them and restores the slug in the upstream body.
+	if !models.ValidSlugRef(base) {
+		return nil, "", "", fmt.Errorf("invalid pinned model %q: use up to 256 characters from [A-Za-z0-9._/-]", base)
+	}
+	rewritten, err := sjson.SetBytes(raw, "model", models.DefaultModel)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
-	return rewritten, pin, nil
+	return rewritten, pin, base, nil
 }
 
 func isPinnablePath(path string) bool {

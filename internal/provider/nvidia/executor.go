@@ -27,9 +27,17 @@ const providerKey = "nvidia"
 // headerFunctionID is the NVCF function header: set on every upstream predict
 // request, and read back from inbound gateway requests so a client can pin the
 // instance it wants. headerCaptchaToken is the one-shot hCaptcha passcode.
+//
+// headerFunctionSlug / headerFunctionNamespace name a predict target the
+// registry does not list (functions NVIDIA serves without a playground page):
+// both travel as inbound headers — set by the gateway middleware when a body
+// pin's model id is unknown, or directly by clients — and let the executor
+// synthesize the invocation triple instead of rejecting the request.
 const (
-	headerFunctionID   = "nv-function-id"
-	headerCaptchaToken = "nv-captcha-token"
+	headerFunctionID        = "nv-function-id"
+	headerFunctionSlug      = "nv-function-slug"
+	headerFunctionNamespace = "nv-function-namespace"
+	headerCaptchaToken      = "nv-captcha-token"
 )
 
 // Options configures the Nvidia playground executor.
@@ -235,6 +243,11 @@ func (e *Executor) preparePayload(req clipexec.Request, opts clipexec.Options, s
 // ("<function-id>@<publisher>/<slug>", which wins) or from the inbound
 // nv-function-id header; the gateway middleware rewrites a body pin into that
 // header so cliproxy's model routing still sees a known model id.
+//
+// When the pinned model is not in the registry — functions NVIDIA serves
+// without a playground page — the target is synthesized from the pin instead
+// of rejected. The same is possible without a body pin via nv-function-slug
+// (plus nv-function-id) headers, optionally with nv-function-namespace.
 func resolveInvokeTarget(model string, headers http.Header) (models.ModelInfo, string, error) {
 	pin, base, hasPin := models.SplitFunctionRef(model)
 	if hasPin {
@@ -245,8 +258,30 @@ func resolveInvokeTarget(model string, headers http.Header) (models.ModelInfo, s
 		base = model
 	}
 
+	// Header-named unlisted target (middleware rewrite of an unknown body pin,
+	// or a client that can only set headers): everything comes from headers.
+	if slug := strings.TrimSpace(headers.Get(headerFunctionSlug)); slug != "" && !hasPin {
+		info, err := synthesizeHeaderTarget(headers, slug)
+		if err != nil {
+			return models.ModelInfo{}, "", err
+		}
+		// The upstream body carries the slug ref, not the carrier model id the
+		// gateway routed on.
+		return info, slug, nil
+	}
+
 	info, err := models.Lookup(base)
 	if err != nil {
+		if hasPin {
+			// Pinned model the registry does not list: build the triple from
+			// the pin instead of rejecting (unknown model has no routing path
+			// here unless the middleware rewrote it, which already failed).
+			info, serr := synthesizePinned(pin, base, headers)
+			if serr != nil {
+				return models.ModelInfo{}, "", serr
+			}
+			return info, base, nil
+		}
 		return models.ModelInfo{}, "", err
 	}
 	if hasPin {
@@ -263,8 +298,32 @@ func resolveInvokeTarget(model string, headers http.Header) (models.ModelInfo, s
 	return info, model, nil
 }
 
-// setBodyModel replaces the top-level model field of an already-valid request
-// body, leaving every other field untouched.
+// synthesizeHeaderTarget builds the invocation triple from the nv-function-*
+// headers alone. slug must look like a predict slug; the function id is
+// required; the namespace header is optional (defaulting to the shared
+// playground namespace).
+func synthesizeHeaderTarget(headers http.Header, slug string) (models.ModelInfo, error) {
+	if !models.ValidSlugRef(slug) {
+		return models.ModelInfo{}, fmt.Errorf("invalid %s %q: use up to 256 characters from [A-Za-z0-9._/-]", headerFunctionSlug, slug)
+	}
+	pin := strings.TrimSpace(headers.Get(headerFunctionID))
+	if !models.ValidFunctionID(pin) {
+		return models.ModelInfo{}, fmt.Errorf("%s requires a valid %s header (got %q)", headerFunctionSlug, headerFunctionID, pin)
+	}
+	return models.SynthesizeFunctionRef(pin, slug, strings.TrimSpace(headers.Get(headerFunctionNamespace))), nil
+}
+
+// synthesizePinned builds the invocation triple for "<function-id>@<model>"
+// when the model portion is not in the registry: the model string is the
+// slug ref and the pin is the function id. The optional namespace header
+// overrides the shared playground namespace.
+func synthesizePinned(pin, base string, headers http.Header) (models.ModelInfo, error) {
+	if !models.ValidSlugRef(base) {
+		return models.ModelInfo{}, fmt.Errorf("invalid model %q for a function pin: use up to 256 characters from [A-Za-z0-9._/-]", base)
+	}
+	return models.SynthesizeFunctionRef(pin, base, strings.TrimSpace(headers.Get(headerFunctionNamespace))), nil
+}
+
 func setBodyModel(body []byte, model string) ([]byte, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {

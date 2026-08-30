@@ -125,3 +125,33 @@ func TestLookupPinnedErrors(t *testing.T) {
 		t.Fatalf("error names %q, want the bare model id without the pin", unknown.Model)
 	}
 }
+
+func TestSynthesizeFunctionRef(t *testing.T) {
+	info := SynthesizeFunctionRef("3ace7b49-e82c-4cc6-93b2-bce512c6c4d5", "qwen3.8-2.4t-a95b", "")
+	if info.FunctionID != "3ace7b49-e82c-4cc6-93b2-bce512c6c4d5" ||
+		info.Slug != "qwen3.8-2.4t-a95b" ||
+		info.Namespace != Namespace {
+		t.Fatalf("info = %+v", info)
+	}
+	if info.Capability != nil {
+		t.Fatalf("unlisted target must not claim capabilities: %+v", info.Capability)
+	}
+	// publisher/ prefix collapses to the bare slug
+	info = SynthesizeFunctionRef("id", "qwen/qwen3.8-2.4t-a95b", "customns")
+	if info.Slug != "qwen3.8-2.4t-a95b" || info.Namespace != "customns" {
+		t.Fatalf("info = %+v", info)
+	}
+}
+
+func TestValidSlugRef(t *testing.T) {
+	for _, ok := range []string{"qwen3.8-2.4t-a95b", "qwen/qwen3.8-2.4t-a95b", "a.b_c-d/e"} {
+		if !ValidSlugRef(ok) {
+			t.Fatalf("ValidSlugRef(%q) = false", ok)
+		}
+	}
+	for _, bad := range []string{"", "has space", "with@at", "with\ttab"} {
+		if ValidSlugRef(bad) {
+			t.Fatalf("ValidSlugRef(%q) = true", bad)
+		}
+	}
+}

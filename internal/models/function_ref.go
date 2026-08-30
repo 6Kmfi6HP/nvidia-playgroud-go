@@ -20,6 +20,12 @@ package models
 // SplitFunctionRef/ValidateFunctionRef are shared by the gateway middleware
 // (which normalizes the body pin into the header before model routing) and
 // the provider executor (which applies the pin to the resolved ModelInfo).
+//
+// A pinned model the registry does not list is still callable: NVIDIA serves
+// functions that never appear in the playground catalog (no playground page,
+// but the predict backend answers when the namespace/slug/function-id triple
+// is known). SynthesizeFunctionRef builds the invocation data for those, so a
+// pin can reach any NVCF function behind the shared namespace.
 
 import (
 	"fmt"
@@ -106,4 +112,41 @@ func LookupPinned(model string) (info ModelInfo, canonical string, err error) {
 		info.FunctionID = pin
 	}
 	return info, model, nil
+}
+
+// SynthesizeFunctionRef builds invocation data for a pinned target the
+// registry does not list. slugRef may be "<publisher>/<slug>" or the bare
+// slug; only the last segment is used in the predict URL. An empty namespace
+// falls back to Namespace (every known playground function shares it).
+// Capability stays zero: unlisted endpoints get no thinking/vision hints
+// until someone verifies them.
+func SynthesizeFunctionRef(pin, slugRef, namespace string) ModelInfo {
+	slug := slugRef
+	if i := strings.LastIndex(slugRef, "/"); i >= 0 {
+		slug = slugRef[i+1:]
+	}
+	if namespace == "" {
+		namespace = Namespace
+	}
+	return ModelInfo{Slug: slug, Namespace: namespace, FunctionID: pin}
+}
+
+// ValidSlugRef reports whether ref can name a predict slug: non-empty and
+// free of characters that would corrupt the URL path or the JSON body model
+// field (whitespace, '@', quotes, control chars). "<publisher>/<slug>" form
+// is allowed; the slash is the only separator.
+func ValidSlugRef(ref string) bool {
+	if ref == "" || len(ref) > 256 {
+		return false
+	}
+	for i := 0; i < len(ref); i++ {
+		c := ref[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-' || c == '_' || c == '.' || c == '/':
+		default:
+			return false
+		}
+	}
+	return true
 }
