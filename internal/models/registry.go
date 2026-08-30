@@ -45,23 +45,25 @@ type ModelInfo struct {
 	// Slug is the model name segment used in the predict URL path
 	// (everything after the last "/"). E.g. "kimi-k3" for
 	// "moonshotai/kimi-k3".
-	Slug string
+	Slug string `json:"slug"`
 	// Namespace is the NVCF namespace for this model. Currently always
 	// Namespace, but kept per-model in case NVIDIA splits sandboxes.
-	Namespace string
+	Namespace string `json:"namespace"`
 	// FunctionID is the nv-function-id header value (per-model UUID).
-	FunctionID string
-	Capability *ModelCapability
+	FunctionID string `json:"function_id"`
+	// Capability is marshaled into the registry JSON cache and restored
+	// by LoadCache; omitted when nil.
+	Capability *ModelCapability `json:"capability,omitempty"`
 }
 
 type ModelCapability struct {
-	ToolCalling      bool
-	StructuredOutput bool
-	Vision           bool
+	ToolCalling      bool `json:"tool_calling"`
+	StructuredOutput bool `json:"structured_output"`
+	Vision           bool `json:"vision"`
 	// Thinking means the model accepts chat_template_kwargs with
 	// enable_thinking. Leave false unless a live probe verified it: most of
 	// the 2026-08 catalog (e.g. kimi-k3) rejects thinking kwargs with 400.
-	Thinking bool
+	Thinking bool `json:"thinking"`
 }
 
 // PredictEndpoint returns the predict URL for a model info.

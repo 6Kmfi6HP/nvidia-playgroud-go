@@ -92,7 +92,7 @@ curl http://localhost:8080/v1/chat/completions \
   -d '{"model":"deepseek-ai/deepseek-v4-pro-0813","messages":[{"role":"user","content":"Hi"}],"stream":true}'
 ```
 
-- **运行时自动刷新**：serve 启动即拉一次目录，之后按 `-model-refresh` 间隔（默认 `6h`；`0` = 只启动时拉一次；`<0` = 关闭、只用编译期快照）热刷新注册表并重绑网关 `/v1/models`，失败只记日志、保留旧表。
+- **运行时自动刷新**：serve 启动即拉一次目录，之后按 `-model-refresh` 间隔（默认 `6h`；`0` = 只启动时拉一次；`<0` = 关闭、只用编译期快照）热刷新注册表并重绑网关 `/v1/models`，失败只记日志、保留旧表。每次抓取成功会把最新注册表原子写入 JSON 缓存（默认 `models_cache.json`，`-model-cache` 改路径、`-model-cache=` 关闭）；启动时先加载缓存，未联网也能立刻列出上次成功抓到的模型，首次抓取失败不再退回空表/旧快照。
 - 重新生成快照（手动）：
 
 ```bash
@@ -224,8 +224,17 @@ go run ./cmd/serve -auto -addr :8080
 # （也可设环境变量 CHROME_PROXY）
 go run ./cmd/serve -auto -proxy socks5://100.74.21.88:7890
 
+# 模型目录：默认请求带 filters 的 NIM 预览列表（更多模型，40 候选）。该 URL
+# 在 AWS WAF 挑战后；serve 会用内置纯 Go 求解器自动解出 aws-waf-token
+# （内嵌 V8 执行 challenge.js 解混淆 + AES-GCM + PoW，无需浏览器、无需填写 token），
+# 失败时再自动回退无过滤页面（24 候选）。也可手动指定 token 跳过求解：
+go run ./cmd/serve -auto -catalog-cookie "aws-waf-token=<从浏览器 DevTools 复制>"
+
 # 覆盖默认（实验脚本 scripts/ttft_sweep.sh）
 go run ./cmd/serve -auto -pool-size=2 -pool-workers=2 -coalesce-ms=0 -max-inflight=8
+
+# 无请求时自动停池：默认 3 分钟没有任何 take 就停止求解（-pool-idle=3m），
+# 下次请求到达时按需重启；-pool-idle=0 关闭此行为（始终后台填充）
 
 # OpenAI Chat Completions
 curl http://localhost:8080/v1/chat/completions \
@@ -250,7 +259,7 @@ curl -s http://localhost:8080/healthz
 - 验证码来源优先级：请求头 `nv-captcha-token` > `-captcha` 一次性 flag（首请求消费后失效）> `-auto` 池（默认 PoW 求解，池空时最多等 `-captcha-wait` 默认 30s 后返回 503）。
 - 上游返回 captcha 形状的 4xx（`Token is invalid` / `hcaptcha` 字样）时自动换新 token 重试，最多 3 次尝试（2 次换新）；池内 token 默认 90s TTL 过期丢弃。
 - 流式优化：关闭 `continuous_usage_stats`、可选 content coalesce（`-coalesce-ms`）；`-max-inflight` 限制并发上游流（默认 4，超限等待 `-inflight-wait` 500ms 后 503）。
-- 模型目录热刷新：`-model-refresh`（默认 6h；`0` 只启动拉一次；`<0` 关闭）。
+- 模型目录热刷新：`-model-refresh`（默认 6h；`0` 只启动拉一次；`<0` 关闭）。目录抓取使用 **tls-client 模拟 Chrome 131 的 TLS/HTTP2 指纹**（JA3/JA4 + HTTP/2 SETTINGS），并经代理走固定出口；优先 filtered 列表 URL（40 个候选），被 AWS WAF 挑战时由 **internal/waftoken** 自动求解（挑战页 → challenge.js → V8 解混淆提取 AES 密钥 → 浏览器信号 AES-256-GCM 加密 → 解 PoW（NetworkBandwidth/scrypt/SHA-2）→ POST 换 `aws-waf-token`，纯 Go 无浏览器无 Node），仍失败才回退 unfiltered 页面（24 候选）。Akamai `ak_bmsc`/`bm_mi` 等会话 cookie 由内置 jar 自动吸收并重放。抓取成功后注册表自动持久化到 `-model-cache` JSON（默认 `models_cache.json`，已加入 .gitignore），启动时优先加载，失败/离线也能立即出模型。
 - 所有 flag 见 `go run ./cmd/serve -h`。
 
 流式时序 / 并发实验：

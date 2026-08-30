@@ -18,7 +18,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -34,7 +36,12 @@ import (
 	"glm52-nvidia/internal/hcaptcha"
 	"glm52-nvidia/internal/hcaptchapow"
 	"glm52-nvidia/internal/hsw"
+	"glm52-nvidia/internal/models"
 	"glm52-nvidia/internal/provider/nvidia"
+	"glm52-nvidia/internal/waftoken"
+
+	tlsclient "github.com/bogdanfinn/tls-client"
+	tlsprofiles "github.com/bogdanfinn/tls-client/profiles"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api"
@@ -58,9 +65,12 @@ func main() {
 	inflightWait := flag.Duration("inflight-wait", 500*time.Millisecond, "how long to wait for an in-flight slot before returning 503 (0=reject immediately)")
 	coalesceMs := flag.Int("coalesce-ms", 16, "merge consecutive SSE content deltas within this window (0=off); first token always flushes immediately")
 	poolTTL := flag.Duration("pool-ttl", 90*time.Second, "discard pooled captcha tokens older than this (-auto)")
+	poolIdle := flag.Duration("pool-idle", 3*time.Minute, "stop solving after this long without a take (-auto); 0 never idle-stops (restarts on next request)")
 	captchaWait := flag.Duration("captcha-wait", 30*time.Second, "max wait for a pooled captcha token per request (0=block until ready); then 503")
 	modelRefresh := flag.Duration("model-refresh", 6*time.Hour, "re-scrape build.nvidia.com for the playground model catalog on this interval (0=fetch once at startup; <0=keep the compiled-in snapshot)")
-	proxy := flag.String("proxy", "", "proxy for upstream API and the pure-Go PoW solver (e.g. socks5://host:port); falls back to CHROME_PROXY")
+	modelCache := flag.String("model-cache", "models_cache.json", "JSON cache file for the live model catalog: written after every successful refresh, loaded at startup so model ids are available before/without the first fetch (empty disables)")
+	proxy := flag.String("proxy", "", "proxy for upstream API, the pure-Go PoW solver and the model-catalog scraper (e.g. socks5://host:port); falls back to CHROME_PROXY")
+	catalogCookie := flag.String("catalog-cookie", "", "Cookie header (e.g. aws-waf-token=...) for the filtered build.nvidia.com model catalog; exported from a browser that passed the AWS WAF challenge")
 	flag.Parse()
 
 	if !*auto && *captchaFlag == "" {
@@ -98,11 +108,42 @@ func main() {
 	}
 
 	// Route the pure-Go PoW solver's own HTTP traffic (checksiteconfig, hsw.js
-	// download, getcaptcha exchange) through the same proxy as upstream API
-	// calls. Each package keeps its own overall request timeout.
+	// download, getcaptcha exchange) and the model-catalog scraper through
+	// the same proxy as upstream API calls. Each package keeps its own
+	// overall request timeout.
 	hcaptcha.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: transport})
 	hsw.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: transport})
 	hcaptchapow.SetHTTPClient(&http.Client{Timeout: 30 * time.Second, Transport: transport})
+	models.SetHTTPClient(&http.Client{Timeout: 30 * time.Second, Transport: transport})
+	tlsOpts := []tlsclient.HttpClientOption{
+		tlsclient.WithClientProfile(tlsprofiles.Chrome_131),
+		tlsclient.WithTimeoutSeconds(30),
+	}
+	// tls-client only knows socks5; socks5h is equivalent here (DNS is
+	// resolved by the proxy in both cases).
+	if proxyURL != "" {
+		tlsOpts = append(tlsOpts, tlsclient.WithProxyUrl(strings.Replace(proxyURL, "socks5h://", "socks5://", 1)))
+	}
+	if tc, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(), tlsOpts...); err == nil {
+		models.SetTLSClient(tlsClientAdapter{c: tc})
+		log.Printf("model catalog: impersonating Chrome TLS/HTTP2 fingerprint (tls-client)")
+	} else {
+		log.Printf("model catalog: tls-client init failed (%v); using standard transport", err)
+	}
+	if cc := strings.TrimSpace(*catalogCookie); cc != "" {
+		models.SetCatalogCookie(cc)
+		log.Printf("model catalog: using aws-waf-token cookie from -catalog-cookie")
+	}
+	// Automatic AWS WAF challenge solving for the filtered catalog: mint an
+	// aws-waf-token with the pure-Go solver (internal/waftoken, embedded V8)
+	// whenever the catalog page challenges us. Same proxy as everything else.
+	waftoken.SetProxy(proxyURL)
+	models.RegisterMinter(waftoken.Mint)
+	log.Printf("model catalog: auto WAF token minting enabled (proxy=%v)", proxyURL != "")
+	// Persist the live-scraped catalog to a JSON cache (auto-written after
+	// each successful refresh) and restore it at startup below, so model ids
+	// are available immediately even when the first fetch fails.
+	models.SetCacheFile(*modelCache)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -112,13 +153,14 @@ func main() {
 	)
 	if *auto {
 		poolCfg := captcha.PoolConfig{
-			Size:    *poolSize,
-			Workers: *poolWorkers,
-			TTL:     *poolTTL,
+			Size:        *poolSize,
+			Workers:     *poolWorkers,
+			TTL:         *poolTTL,
+			IdleTimeout: *poolIdle,
 		}
 		pool = captcha.NewPool(ctx, powExtractTimed(), poolCfg)
-		log.Printf("captcha pool: solver=pow (pure Go, no browser) size=%d workers=%d ttl=%s captcha-wait=%s",
-			*poolSize, *poolWorkers, *poolTTL, *captchaWait)
+		log.Printf("captcha pool: solver=pow (pure Go, no browser) size=%d workers=%d ttl=%s idle=%s captcha-wait=%s",
+			*poolSize, *poolWorkers, *poolTTL, *poolIdle, *captchaWait)
 		defer pool.Close()
 	}
 
@@ -142,6 +184,17 @@ func main() {
 	tokenStore := sdkAuth.GetTokenStore()
 	if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok {
 		dirSetter.SetBaseDir(cfg.AuthDir)
+	}
+
+	// Restore the last-known-good live catalog (written by Refresh's
+	// auto-save) before serving: model ids are ready instantly at startup
+	// and survive network failures. Missing cache (first run) keeps the
+	// compiled-in snapshot; an unreadable one is logged and ignored.
+	if m, err := models.LoadCache(); err == nil {
+		models.Replace(m)
+		log.Printf("model cache: loaded %d models from %s", len(m), *modelCache)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		log.Printf("model cache: %v (using compiled-in snapshot)", err)
 	}
 
 	catalog := newModelCatalog(nvidia.RegistryModels())
@@ -230,9 +283,10 @@ func execCoalesce(ms int) time.Duration {
 // pool, which already logs them with backoff.
 func powExtractTimed() captcha.ExtractFunc {
 	var (
-		mu    sync.Mutex
-		count int
-		total time.Duration
+		mu      sync.Mutex
+		count   int
+		total   time.Duration
+		lastLog time.Time
 	)
 	return func(ctx context.Context) (string, error) {
 		start := time.Now()
@@ -247,8 +301,17 @@ func powExtractTimed() captcha.ExtractFunc {
 		total += elapsed
 		avg := total / time.Duration(count)
 		rate := int(3600 / avg.Seconds()) // tokens/h per worker
+		// Log the first solves, then at most one per minute: a sustained idle
+		// refill cycle (every TTL) must not spam the log with per-solve lines.
+		shouldLog := count <= 2 || time.Since(lastLog) > time.Minute
+		if shouldLog {
+			lastLog = time.Now()
+		}
 		mu.Unlock()
 
+		if !shouldLog {
+			return token, nil
+		}
 		difficulty := "-"
 		if pow, perr := hcaptchapow.ParsePow(info.JWT); perr == nil {
 			difficulty = strconv.FormatFloat(pow.Difficulty, 'f', -1, 64)

@@ -41,7 +41,9 @@ func startModelRefresher(ctx context.Context, client *http.Client, catalog *mode
 }
 
 func refreshModels(ctx context.Context, client *http.Client, catalog *modelCatalog, core *coreauth.Manager, exec coreauth.ProviderExecutor) {
-	res, err := models.Refresh(ctx, client)
+	// nil selects the package client: the browser-fingerprint (tls-client)
+	// instance when cmd/serve installed one, else the proxied standard client.
+	res, err := models.Refresh(ctx, nil)
 	if err != nil {
 		log.Printf("model catalog refresh failed (keeping previous %d models): %v", len(models.All()), err)
 		return

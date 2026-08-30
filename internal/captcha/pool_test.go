@@ -539,6 +539,76 @@ func TestPoolTokenLease_ReleaseAfterCloseIsDiscarded(t *testing.T) {
 	}
 }
 
+// TestPoolIdleStopRestart: IdleTimeout must stop workers and drop buffered
+// tokens (zero solver cost while idle), and the next TakeLease must restart
+// the pool on demand without exposing "closed".
+func TestPoolIdleStopRestart(t *testing.T) {
+	var solves atomic.Int64
+	extract := func(ctx context.Context) (string, error) {
+		solves.Add(1)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+		return "tok", nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	p := NewPool(ctx, extract, PoolConfig{Size: 1, Workers: 1, TTL: time.Minute, IdleTimeout: 200 * time.Millisecond})
+	defer p.Close()
+
+	waitFor := func(what string, d time.Duration, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(d)
+		for time.Now().Before(deadline) {
+			if cond() {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("%s: timed out after %s", what, d)
+	}
+
+	// Prewarm fills the pool.
+	waitFor("prewarm fill", 2*time.Second, func() bool { return p.Ready() == 1 })
+
+	// Consume the token; the worker refills (solves=2), then stops idle.
+	lease, err := p.TakeLease(ctx)
+	if err != nil {
+		t.Fatalf("TakeLease: %v", err)
+	}
+	lease.Commit()
+	waitFor("refill after take", 2*time.Second, func() bool { return p.Ready() == 1 })
+	waitFor("idle shutdown drops buffer", 2*time.Second, func() bool { return p.Ready() == 0 })
+	got := solves.Load()
+	if got != 2 {
+		t.Fatalf("solves=%d want 2 (no background solving while idle)", got)
+	}
+
+	// Idle for longer than IdleTimeout: still no solves, still stopped.
+	time.Sleep(350 * time.Millisecond)
+	if solves.Load() != 2 {
+		t.Fatalf("solves=%d want 2 (pool must stay stopped after idle shutdown)", solves.Load())
+	}
+
+	// Next take restarts the pool on demand.
+	lease2, err := p.TakeLease(ctx)
+	if err != nil {
+		t.Fatalf("TakeLease after idle: %v", err)
+	}
+	lease2.Release() // keep the token pooled so no extra refill happens
+	if lease2.Token() != "tok" {
+		t.Fatalf("token=%q", lease2.Token())
+	}
+	waitFor("refill after restart", 2*time.Second, func() bool { return p.Ready() == 1 })
+	if got := solves.Load(); got != 3 {
+		t.Fatalf("solves=%d want 3 (restart mints exactly the refill for this take)", got)
+	}
+}
+
 func newStaticPool(t *testing.T, entries ...entry) *Pool {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -554,5 +624,8 @@ func newStaticPool(t *testing.T, entries ...entry) *Pool {
 		changed:   make(chan struct{}),
 		ctx:       ctx,
 		cancel:    cancel,
+		parent:    ctx,
+		running:   true,
+		genDone:   make(chan struct{}),
 	}
 }

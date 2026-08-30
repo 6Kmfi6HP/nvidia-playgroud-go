@@ -9,3 +9,6 @@
 *.test
 *.out
 /serve
+
+# runtime model catalog cache (written by serve after each live refresh)
+models_cache.json
