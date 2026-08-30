@@ -951,11 +951,18 @@ func TestExecuteStreamSendsPinnedFunctionID(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotFunction = r.Header.Get("nv-function-id")
 		var body map[string]any
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &body)
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("io.ReadAll(r.Body) error = %v", err)
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Errorf("json.Unmarshal(request body) error = %v", err)
+		}
 		gotBodyModel, _ = body["model"].(string)
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+		if _, err := io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"); err != nil {
+			t.Errorf("io.WriteString: %v", err)
+		}
 	}))
 	defer up.Close()
 

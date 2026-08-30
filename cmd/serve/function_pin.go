@@ -70,7 +70,9 @@ func functionPinMiddleware() gin.HandlerFunc {
 		}
 
 		raw, err := io.ReadAll(req.Body)
-		_ = req.Body.Close()
+		if cerr := req.Body.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
 		if err != nil {
 			// Partial read: hand back what arrived and let the handler report it.
 			req.Body = io.NopCloser(bytes.NewReader(raw))

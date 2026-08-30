@@ -135,8 +135,13 @@ func TestFunctionPinMiddlewareFeedsTheExecutor(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(resp.Body)
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
 		var out struct {
 			Body  string `json:"body"`
 			Pin   string `json:"pin"`
@@ -144,7 +149,9 @@ func TestFunctionPinMiddlewareFeedsTheExecutor(t *testing.T) {
 				Message string `json:"message"`
 			} `json:"error"`
 		}
-		_ = json.Unmarshal(raw, &out)
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
 		msg := out.Body
 		if out.Error.Message != "" {
 			msg = out.Error.Message

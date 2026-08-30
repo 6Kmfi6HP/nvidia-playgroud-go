@@ -237,7 +237,10 @@ func TestBuildRequestModelInfoOverrideWins(t *testing.T) {
 	if want := "https://buildapi.ngc.nvidia.com/v2/predict/models/ns/sl"; httpReq.URL.String() != want {
 		t.Errorf("URL = %q, want %q", httpReq.URL.String(), want)
 	}
-	body, _ := io.ReadAll(httpReq.Body)
+	body, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll(httpReq.Body) error = %v", err)
+	}
 	if strings.Contains(string(body), pinned) {
 		t.Errorf("body still carries the pin: %s", body)
 	}
