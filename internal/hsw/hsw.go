@@ -15,6 +15,7 @@ package hsw
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -386,7 +387,8 @@ func jsErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	if je, ok := err.(*v8.JSError); ok {
+	var je *v8.JSError
+	if errors.As(err, &je) {
 		if je.Message != "" {
 			return fmt.Errorf("%s (at %s)", je.Message, je.Location)
 		}

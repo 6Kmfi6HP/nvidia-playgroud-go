@@ -106,12 +106,12 @@ func buildSignals(s *session) map[string]interface{} {
 	}
 }
 
-func encodeSignals(signals map[string]interface{}, crypto *cryptoConfigFull) ([]interface{}, string, error) {
+func encodeSignals(signals map[string]interface{}, crypto *cryptoConfigFull) (out []interface{}, checksum string, err error) {
 	jsonData, err := json.Marshal(signals)
 	if err != nil {
 		return nil, "", err
 	}
-	checksum := fmt.Sprintf("%x", crc32.ChecksumIEEE(jsonData))
+	checksum = fmt.Sprintf("%x", crc32.ChecksumIEEE(jsonData))
 
 	block, err := aes.NewCipher(crypto.key)
 	if err != nil {
@@ -143,19 +143,19 @@ func encodeSignals(signals map[string]interface{}, crypto *cryptoConfigFull) ([]
 }
 
 func (s *session) solveChallenge(ctx context.Context, ci *challengeInputs, checksum string) (string, error) {
-	innerType := innerChallengeType(ci.input)
+	innerType := innerChallengeType(ci.Input)
 	switch {
 	case innerType == "NetworkBandwidth":
-		return solveNetworkBandwidth(ci.diff)
-	case strings.HasPrefix(ci.cType, "h72f957df"):
-		return solveScryptHashcash(ci.input, checksum, ci.diff, ci.mem)
-	case strings.HasPrefix(ci.cType, "h7b0c470f"):
-		return solveSHA2Hashcash(ctx, ci.input, checksum, ci.diff)
+		return solveNetworkBandwidth(ci.Diff)
+	case strings.HasPrefix(ci.CType, "h72f957df"):
+		return solveScryptHashcash(ci.Input, checksum, ci.Diff, ci.Mem)
+	case strings.HasPrefix(ci.CType, "h7b0c470f"):
+		return solveSHA2Hashcash(ctx, ci.Input, checksum, ci.Diff)
 	default:
-		if ci.diff >= 1 && ci.diff <= 5 {
-			return solveNetworkBandwidth(ci.diff)
+		if ci.Diff >= 1 && ci.Diff <= 5 {
+			return solveNetworkBandwidth(ci.Diff)
 		}
-		return solveScryptHashcash(ci.input, checksum, ci.diff, ci.mem)
+		return solveScryptHashcash(ci.Input, checksum, ci.Diff, ci.Mem)
 	}
 }
 

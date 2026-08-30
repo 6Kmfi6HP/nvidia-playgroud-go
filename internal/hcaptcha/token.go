@@ -27,38 +27,53 @@ var (
 // a solver that loses the cache race is closed immediately.
 var solverCache sync.Map // location -> *hsw.Solver
 
+// SolveResult carries the SolveN pipeline outputs.
+type SolveResult struct {
+	JWT         string // challenge jwt from checksiteconfig
+	Location    string // hsw.js bundle location (solver cache key / download URL)
+	Fingerprint string // base64 fingerprint sent to the hsw solver
+	N           string // solved proof-of-work n value
+	Elapsed     time.Duration
+}
+
 // SolveN runs the full hCaptcha solve pipeline for a sitekey/host:
 // checksiteconfig -> JWT parse -> fingerprint build -> hsw solve.
 //
-// It returns the challenge jwt, the bundle location (used as the solver cache
-// key and for hsw.js download), the base64 fingerprint, the solved n and the
-// total wall-clock time. On error, the values produced before the failing
-// stage are still returned (e.g. jwt/location/fpB64 when only the solve
-// failed), and the error carries the failing stage as a prefix.
-func SolveN(ctx context.Context, sitekey, host string) (jwt, location, fpB64, n string, elapsed time.Duration, err error) {
+// On error, the fields produced before the failing stage are still populated
+// (e.g. JWT/Location/Fingerprint when only the solve failed), and the error
+// carries the failing stage as a prefix.
+func SolveN(ctx context.Context, sitekey, host string) (SolveResult, error) {
 	start := time.Now()
+	var res SolveResult
 
-	jwt, location, err = fetchChallenge(ctx, sitekey, host)
+	var err error
+	res.JWT, res.Location, err = fetchChallenge(ctx, sitekey, host)
 	if err != nil {
-		return "", "", "", "", time.Since(start), fmt.Errorf("hcaptcha: fetch challenge: %w", err)
+		res.Elapsed = time.Since(start)
+		return res, fmt.Errorf("hcaptcha: fetch challenge: %w", err)
 	}
-	pow, err := hcaptchapow.ParsePow(jwt)
+	pow, err := hcaptchapow.ParsePow(res.JWT)
 	if err != nil {
-		return jwt, location, "", "", time.Since(start), fmt.Errorf("hcaptcha: parse pow: %w", err)
+		res.Elapsed = time.Since(start)
+		return res, fmt.Errorf("hcaptcha: parse pow: %w", err)
 	}
-	fpB64, err = BuildFingerprint(pow)
+	res.Fingerprint, err = BuildFingerprint(pow)
 	if err != nil {
-		return jwt, location, "", "", time.Since(start), fmt.Errorf("hcaptcha: build fingerprint: %w", err)
+		res.Elapsed = time.Since(start)
+		return res, fmt.Errorf("hcaptcha: build fingerprint: %w", err)
 	}
-	solver, err := solverFor(ctx, location)
+	solver, err := solverFor(ctx, res.Location)
 	if err != nil {
-		return jwt, location, fpB64, "", time.Since(start), fmt.Errorf("hcaptcha: load solver: %w", err)
+		res.Elapsed = time.Since(start)
+		return res, fmt.Errorf("hcaptcha: load solver: %w", err)
 	}
-	n, err = solver.SolveN(ctx, jwt, fpB64)
+	res.N, err = solver.SolveN(ctx, res.JWT, res.Fingerprint)
 	if err != nil {
-		return jwt, location, fpB64, "", time.Since(start), fmt.Errorf("hcaptcha: solve: %w", err)
+		res.Elapsed = time.Since(start)
+		return res, fmt.Errorf("hcaptcha: solve: %w", err)
 	}
-	return jwt, location, fpB64, n, time.Since(start), nil
+	res.Elapsed = time.Since(start)
+	return res, nil
 }
 
 // solverFor returns the cached solver for location, downloading, patching and

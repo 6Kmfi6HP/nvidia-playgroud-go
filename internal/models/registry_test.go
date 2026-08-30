@@ -51,7 +51,10 @@ func TestLookupUnknown(t *testing.T) {
 }
 
 func TestPredictEndpoint(t *testing.T) {
-	info, _ := Lookup("moonshotai/kimi-k3")
+	info, err := Lookup("moonshotai/kimi-k3")
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
 	want := PredictBase + "/v2/predict/models/" + Namespace + "/kimi-k3"
 	if got := info.PredictEndpoint(); got != want {
 		t.Fatalf("PredictEndpoint() = %q want %q", got, want)

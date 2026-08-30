@@ -71,17 +71,10 @@ var (
 	defaultHTTPBudget = 25 * time.Second
 )
 
-// catalogCookie is an optional Cookie header value (e.g.
-// "aws-waf-token=...") sent with catalog-page fetches to pass the AWS WAF
-// JS challenge on the filtered catalog URL. Empty disables it. The token
-// must be minted by the WAF challenge itself (e.g. exported from a browser
-// session); arbitrary values are rejected with HTTP 202.
-var catalogCookie string
-
 // cookieJar keeps cookies learned from catalog responses (Akamai ak_bmsc /
 // bm_mi, refreshed aws-waf-token) and replays them on later fetches, so a
 // multi-request scrape behaves like one browser session.
-var cookieJar, _ = cookiejar.New(nil)
+var cookieJar = newCookieJar()
 
 // SetCatalogCookie sets the Cookie header sent with catalog-page fetches.
 // Call before Fetch/Refresh. Passing "" restores cookie-less fetching.
@@ -89,15 +82,14 @@ var cookieJar, _ = cookiejar.New(nil)
 // build.nvidia.com) so it is replayed on every fetch, including playground
 // probes.
 func SetCatalogCookie(c string) {
-	catalogCookie = c
-	cookieJar, _ = cookiejar.New(nil)
+	cookieJar = newCookieJar()
 	if c == "" {
 		return
 	}
 	// c is a raw Cookie header ("k=v; k2=v2"); parse it into cookies on the
 	// catalog host only.
 	u := &neturl.URL{Scheme: "https", Host: ModelsHost}
-	if req, err := http.NewRequest(http.MethodGet, "https://"+ModelsHost+"/", nil); err == nil {
+	if req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://"+ModelsHost+"/", http.NoBody); err == nil {
 		req.Header.Set("Cookie", c)
 		for _, ck := range req.Cookies() {
 			cookieJar.SetCookies(u, []*http.Cookie{ck})
@@ -376,7 +368,7 @@ func probePlayground(ctx context.Context, client Doer, id string) (ModelInfo, bo
 		return ModelInfo{}, false
 	}
 	m := fnIDRe.FindSubmatch(body)
-	if m == nil || !uuidRe.Match(m[1]) {
+	if len(m) == 0 || !uuidRe.Match(m[1]) {
 		return ModelInfo{}, false
 	}
 	ns := Namespace
@@ -416,7 +408,7 @@ func get(ctx context.Context, client Doer, url string) ([]byte, error) {
 				return nil, ctx.Err()
 			}
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 		if err != nil {
 			return nil, err
 		}
@@ -451,7 +443,7 @@ func get(ctx context.Context, client Doer, url string) ([]byte, error) {
 		if u, perr := neturl.Parse(url); perr == nil {
 			cookieJar.SetCookies(u, resp.Cookies())
 		}
-		resp.Body.Close()
+		bestEffortClose(resp.Body)
 		if err != nil {
 			last = err
 			continue
@@ -463,4 +455,15 @@ func get(ctx context.Context, client Doer, url string) ([]byte, error) {
 		return body, nil
 	}
 	return nil, last
+}
+
+// newCookieJar returns an empty cookie jar for the package session.
+// cookiejar.New with nil options never fails; a failure would be a
+// programming error.
+func newCookieJar() *cookiejar.Jar {
+	j, err := cookiejar.New(nil)
+	if err != nil {
+		panic(err)
+	}
+	return j
 }

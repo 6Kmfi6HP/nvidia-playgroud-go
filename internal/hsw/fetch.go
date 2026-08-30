@@ -84,7 +84,7 @@ type ChecksiteResponse struct {
 func FetchChallenge(ctx context.Context, sitekey, host string) (jwt, location string, err error) {
 	u := fmt.Sprintf("%s?host=%s&sitekey=%s&sc=1&swa=0&spst=0&hl=en",
 		ChecksiteBase, url.QueryEscape(host), url.QueryEscape(sitekey))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
 	if err != nil {
 		return "", "", fmt.Errorf("checksiteconfig: %w", err)
 	}
@@ -93,7 +93,7 @@ func FetchChallenge(ctx context.Context, sitekey, host string) (jwt, location st
 	if err != nil {
 		return "", "", fmt.Errorf("checksiteconfig: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("checksiteconfig: HTTP %d", resp.StatusCode)
 	}
@@ -169,25 +169,25 @@ func AssetURL(location string) string {
 
 // Download fetches the raw hsw.js for location.
 func Download(ctx context.Context, location string) ([]byte, error) {
-	url := AssetURL(location)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	assetURL := AssetURL(location)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("hsw download %s: %w", url, err)
+		return nil, fmt.Errorf("hsw download %s: %w", assetURL, err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "*/*")
 
 	resp, err := hswClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("hsw download %s: %w", url, err)
+		return nil, fmt.Errorf("hsw download %s: %w", assetURL, err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("hsw download %s: HTTP %d", url, resp.StatusCode)
+		return nil, fmt.Errorf("hsw download %s: HTTP %d", assetURL, resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBundleSize))
 	if err != nil {
-		return nil, fmt.Errorf("hsw download %s: %w", url, err)
+		return nil, fmt.Errorf("hsw download %s: %w", assetURL, err)
 	}
 	return body, nil
 }
@@ -279,7 +279,7 @@ var reInstantiateBare = regexp.MustCompile(
 // bundles into a synchronous Module + Instance pair wrapped in an already
 // resolved Promise, preserving the {module, instance} shape that the original
 // then-callback receives. Reports whether the rewrite applied.
-func syncWasmInstantiate(src string) (string, int) {
+func syncWasmInstantiate(src string) (out string, count int) {
 	m := reInstantiateThen.FindStringSubmatch(src)
 	if m == nil {
 		return src, 0
@@ -292,7 +292,7 @@ func syncWasmInstantiate(src string) (string, int) {
 }
 
 // syncWasmInstantiateBare handles the no-then variant.
-func syncWasmInstantiateBare(src string) (string, int) {
+func syncWasmInstantiateBare(src string) (out string, count int) {
 	m := reInstantiateBare.FindStringSubmatch(src)
 	if m == nil {
 		return src, 0
@@ -301,4 +301,12 @@ func syncWasmInstantiateBare(src string) (string, int) {
 		`);var __i=new WebAssembly.Instance(__m,` + m[3] +
 		`);return Promise.resolve({module:__m,instance:__i})})()`
 	return strings.ReplaceAll(src, m[0], repl), 1
+}
+
+// closeBody closes c after the body has been consumed or is being discarded;
+// a close failure has no effect on the data already read.
+func closeBody(c io.Closer) {
+	if err := c.Close(); err != nil {
+		_ = err
+	}
 }

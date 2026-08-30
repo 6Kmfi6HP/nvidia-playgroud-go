@@ -97,13 +97,13 @@ type CaptchaAttempt struct {
 
 // Summary renders one attempt for diagnostics: name, HTTP status, transport
 // error and the raw response body clipped to 800 characters.
-func (a CaptchaAttempt) Summary() string {
+func (a *CaptchaAttempt) Summary() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "variant %s: status=%d elapsed=%s", a.Name, a.Status, a.Elapsed.Round(time.Millisecond))
 	if a.Err != nil {
 		fmt.Fprintf(&sb, " err=%v", a.Err)
 	}
-	fmt.Fprintf(&sb, " body=%s", clipBytes(a.Body, getCaptchaErrorClip))
+	fmt.Fprintf(&sb, " body=%s", clipBytes(a.Body))
 	return sb.String()
 }
 
@@ -184,11 +184,11 @@ func PostGetCaptcha(ctx context.Context, params map[string]string) (status int, 
 	if err == nil && status >= 200 && status < 300 {
 		return status, body, nil
 	}
-	jsonSummary := "none"
+	var jsonSummary string
 	if err != nil {
 		jsonSummary = err.Error()
 	} else {
-		jsonSummary = fmt.Sprintf("status=%d body=%s", status, clipBytes(body, getCaptchaErrorClip))
+		jsonSummary = fmt.Sprintf("status=%d body=%s", status, clipBytes(body))
 	}
 	status, body, err = postGetCaptchaOnce(ctx, params, gcEncodingForm)
 	if err != nil {
@@ -199,7 +199,7 @@ func PostGetCaptcha(ctx context.Context, params map[string]string) (status int, 
 
 // postGetCaptchaOnce posts params with one encoding and returns the complete
 // HTTP response. err is non-nil only when no full HTTP response was received.
-func postGetCaptchaOnce(ctx context.Context, params map[string]string, enc gcEncoding) (int, []byte, error) {
+func postGetCaptchaOnce(ctx context.Context, params map[string]string, enc gcEncoding) (status int, raw []byte, err error) {
 	var body io.Reader
 	contentType := ""
 	switch enc {
@@ -224,14 +224,14 @@ func postGetCaptchaOnce(ctx context.Context, params map[string]string, enc gcEnc
 // postGetCaptchaOctet posts a prebuilt binary body (the encrypted msgpack
 // wire) as application/octet-stream, exactly like the widget's encrypted
 // submissions.
-func postGetCaptchaOctet(ctx context.Context, sitekey string, body []byte) (int, []byte, error) {
+func postGetCaptchaOctet(ctx context.Context, sitekey string, body []byte) (status int, raw []byte, err error) {
 	return postGetCaptchaBody(ctx, sitekey, bytes.NewReader(body), "application/octet-stream", "octet-stream")
 }
 
 // postGetCaptchaBody performs one POST against /getcaptcha/<sitekey> with the
 // given body and content type, pinning the browser headers the widget sends.
 // err is non-nil only when no full HTTP response was received.
-func postGetCaptchaBody(ctx context.Context, sitekey string, body io.Reader, contentType, label string) (int, []byte, error) {
+func postGetCaptchaBody(ctx context.Context, sitekey string, body io.Reader, contentType, label string) (status int, respBody []byte, err error) {
 	endpoint := getcaptchaURL
 	if sitekey != "" {
 		endpoint = strings.TrimSuffix(getcaptchaURL, "/") + "/" + url.PathEscape(sitekey)
@@ -250,7 +250,7 @@ func postGetCaptchaBody(ctx context.Context, sitekey string, body io.Reader, con
 	if err != nil {
 		return 0, nil, fmt.Errorf("hcaptcha: getcaptcha (%s): %w", label, err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, getCaptchaBodyLimit))
 	if err != nil {
 		return resp.StatusCode, nil, fmt.Errorf("hcaptcha: getcaptcha (%s): read body: %w", label, err)
@@ -269,7 +269,7 @@ var fetchChecksite = fetchChecksiteLive
 func fetchChecksiteLive(ctx context.Context, sitekey, host string) (jwt, location, key string, err error) {
 	u := fmt.Sprintf("%s?host=%s&sitekey=%s&sc=1&swa=0&spst=0&hl=en",
 		hsw.ChecksiteBase, url.QueryEscape(host), url.QueryEscape(sitekey))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
 	if err != nil {
 		return "", "", "", fmt.Errorf("checksiteconfig: %w", err)
 	}
@@ -278,7 +278,7 @@ func fetchChecksiteLive(ctx context.Context, sitekey, host string) (jwt, locatio
 	if err != nil {
 		return "", "", "", fmt.Errorf("checksiteconfig: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", "", "", fmt.Errorf("checksiteconfig: HTTP %d", resp.StatusCode)
 	}
@@ -352,7 +352,7 @@ func CaptchaAttempts(ctx context.Context, sitekey, host string) (solve SolveInfo
 		Fingerprint: fpB64, N: n, Elapsed: time.Since(start),
 	}
 
-	for i, v := range getCaptchaVariants(sitekey, host, solve) {
+	for i, v := range getCaptchaVariants(sitekey, host, &solve) {
 		if ctx.Err() != nil {
 			return solve, attempts, fmt.Errorf("hcaptcha: getcaptcha: context done: %w", ctx.Err())
 		}
@@ -472,7 +472,7 @@ func runEncryptedAttempt(ctx context.Context, solver *hsw.Solver, sitekey, host 
 	}
 	at.Token = FindP1Token(j)
 	if at.Token == "" {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: encrypted response carries no passcode: %s", clipBytes(j, getCaptchaErrorClip))
+		at.Err = fmt.Errorf("hcaptcha: getcaptcha: encrypted response carries no passcode: %s", clipBytes(j))
 	}
 	return
 }
@@ -491,7 +491,7 @@ func specFromClaim(body []byte) (spec, jwt string, err error) {
 		return "", "", fmt.Errorf("decode claim: %w", err)
 	}
 	if doc.C == nil || doc.C.Req == "" {
-		return "", "", fmt.Errorf("no challenge in claim: %s", clipBytes(body, getCaptchaErrorClip))
+		return "", "", fmt.Errorf("no challenge in claim: %s", clipBytes(body))
 	}
 	specRaw, err := json.Marshal(doc.C)
 	if err != nil {
@@ -509,7 +509,7 @@ type gcVariant struct {
 // specJSON renders the challenge spec getcaptcha expects in its "c" parameter:
 // the widget echoes the challenge state object it claimed (the checksiteconfig
 // "c" object {"type":"hsw","req":<jwt>}) as a JSON string.
-func specJSON(solve SolveInfo) string {
+func specJSON(solve *SolveInfo) string {
 	return fmt.Sprintf(`{"type":"hsw","req":%s}`, mustJSONString(solve.JWT))
 }
 
@@ -527,7 +527,7 @@ func mustJSONString(s string) string {
 // where c is the JSON-stringified challenge spec; variants cover the phase-A
 // bare claim, c as raw JWT vs spec JSON, current vs legacy client builds and a
 // motionData-carrying submission.
-func getCaptchaVariants(sitekey, host string, solve SolveInfo) []gcVariant {
+func getCaptchaVariants(sitekey, host string, solve *SolveInfo) []gcVariant {
 	base := map[string]string{
 		"v":       getCaptchaVersion,
 		"sitekey": sitekey,
@@ -586,9 +586,10 @@ func locationVersion(location string) string {
 func isHex(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
-			return false
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			continue
 		}
+		return false
 	}
 	return true
 }
@@ -628,10 +629,20 @@ func CaptchaTokenDetail(ctx context.Context, sitekey, host string) (string, Solv
 	return "", solve, fmt.Errorf("%s", sb.String())
 }
 
-// clipBytes renders b as a string, truncating at n bytes with a size note.
-func clipBytes(b []byte, n int) string {
+// clipBytes renders b as a string, truncated at getCaptchaErrorClip bytes
+// with a size note.
+func clipBytes(b []byte) string {
+	const n = getCaptchaErrorClip
 	if len(b) <= n {
 		return string(b)
 	}
 	return fmt.Sprintf("%s…(+%d bytes)", string(b[:n]), len(b)-n)
+}
+
+// closeBody closes c after the body has been read or is being discarded; a
+// close failure has no effect on the data already consumed.
+func closeBody(c io.Closer) {
+	if err := c.Close(); err != nil {
+		_ = err
+	}
 }

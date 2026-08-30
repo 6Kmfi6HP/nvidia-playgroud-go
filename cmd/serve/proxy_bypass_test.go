@@ -41,7 +41,9 @@ func TestBypassHostProxyInvalidBase(t *testing.T) {
 		return nil, nil
 	}
 	bypass := bypassHostProxy(pf, "://bad")
-	_, _ = bypass(&http.Request{URL: &url.URL{Host: "anything.example"}})
+	if _, err := bypass(&http.Request{URL: &url.URL{Host: "anything.example"}}); err != nil {
+		t.Fatal(err)
+	}
 	if !called {
 		t.Fatal("original proxy func should still be called")
 	}

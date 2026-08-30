@@ -44,7 +44,6 @@ func TestFindP1Token(t *testing.T) {
 // endpoint rejects it with a non-2xx status, the request must be retried with
 // x-www-form-urlencoded.
 func TestPostGetCaptcha(t *testing.T) {
-	const wantParams = `{"host":"build.nvidia.com","n":"solved-n","sitekey":"sk"}`
 	old := getcaptchaURL
 	defer func() { getcaptchaURL = old }()
 
@@ -54,18 +53,21 @@ func TestPostGetCaptcha(t *testing.T) {
 		gotBody []string
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+		}
 		mu.Lock()
 		gotReq = append(gotReq, r.Header.Get("Content-Type")+"|"+r.Header.Get("Origin")+"|"+r.Header.Get("Referer")+"|"+r.Header.Get("User-Agent")+"|"+r.URL.Path)
 		gotBody = append(gotBody, string(body))
 		mu.Unlock()
 		if r.Header.Get("Content-Type") == "application/json" {
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"success":false,"error":"json not supported"}`))
+			writeTestBody(t, w, []byte(`{"success":false,"error":"json not supported"}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"pass":false,"error":"no passcode yet"}`))
+		writeTestBody(t, w, []byte(`{"pass":false,"error":"no passcode yet"}`))
 	}))
 	defer srv.Close()
 	getcaptchaURL = srv.URL
@@ -124,9 +126,9 @@ func TestPostGetCaptcha(t *testing.T) {
 
 // offlineCaptchaEnv installs the offline overrides the getcaptcha tests use:
 // a fake checksiteconfig (jwt + location + key), a fake solver and a fake
-// postGetCaptcha. It returns the jwt/key/location plus a cleanup function the
-// test must call to restore the package overrides and drop cached solvers.
-func offlineCaptchaEnv(t *testing.T, post func(ctx context.Context, params map[string]string) (int, []byte, error)) (jwt, key, location string, cleanup func()) {
+// postGetCaptcha. It returns the jwt/key plus a cleanup function the test
+// must call to restore the package overrides and drop cached solvers.
+func offlineCaptchaEnv(t *testing.T, post func(ctx context.Context, params map[string]string) (int, []byte, error)) (jwt, key string, cleanup func()) {
 	t.Helper()
 	oldFetch, oldLoad, oldPost, oldOctet := fetchChecksite, loadSolver, postGetCaptcha, postGetCaptchaOctetFn
 	cleanup = func() {
@@ -134,8 +136,8 @@ func offlineCaptchaEnv(t *testing.T, post func(ctx context.Context, params map[s
 		CloseSolvers()
 	}
 
-	location = "/c/getcaptcha-test-loc"
-	jwt = fakeJWT(t, 2, testPowData, location)
+	const location = "/c/getcaptcha-test-loc"
+	jwt = fakeJWT(t, location)
 	key = "c0ffee-0000-4000-8000-000000000000"
 	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, error) {
 		return jwt, location, key, nil
@@ -148,7 +150,7 @@ func offlineCaptchaEnv(t *testing.T, post func(ctx context.Context, params map[s
 		return hsw.New(b)
 	}
 	postGetCaptcha = post
-	return jwt, key, location, cleanup
+	return jwt, key, cleanup
 }
 
 // TestCaptchaTokenVariantLoop verifies the full offline getcaptcha flow:
@@ -158,7 +160,7 @@ func offlineCaptchaEnv(t *testing.T, post func(ctx context.Context, params map[s
 func TestCaptchaTokenVariantLoop(t *testing.T) {
 	const tok = "P1_eyJjaGFsbGVuZ2UudG9rZW4ifQ.offline"
 	var key string // referenced by the POST fake below; declared before it
-	jwt, key, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
+	jwt, key, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
 		if params["c"] == key {
 			return 200, []byte(`{"pass":true,"generated_pass_UUID":"` + tok + `"}`), nil
 		}
@@ -215,7 +217,7 @@ func TestCaptchaTokenVariantLoop(t *testing.T) {
 // response bodies at 800 characters.
 func TestCaptchaTokenErrorAggregation(t *testing.T) {
 	longBody := strings.Repeat("x", 2000)
-	_, _, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
+	_, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
 		return http.StatusBadRequest, []byte(longBody), nil
 	})
 	defer cleanup()
@@ -242,11 +244,11 @@ func TestCaptchaTokenErrorAggregation(t *testing.T) {
 // P1_ token.
 func TestCaptchaTokenEncrypted(t *testing.T) {
 	const tok = "P1_eyJlbmNyeXB0ZWQudG9rZW4ifQ.offline"
-	_, _, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
+	_, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
 		// The encrypted flow claims via getcaptcha: first call (no n) must
 		// return a challenge spec; later plaintext variants fail.
 		if params["n"] == "" && params["c"] == "" {
-			return 200, []byte(`{"c":{"type":"hsw","req":"` + fakeJWT(t, 2, testPowData, "/c/getcaptcha-test-loc") + `"}}`), nil
+			return 200, []byte(`{"c":{"type":"hsw","req":"` + fakeJWT(t, "/c/getcaptcha-test-loc") + `"}}`), nil
 		}
 		return 200, []byte(`{"pass":false,"error-codes":["invalid-data"]}`), nil
 	})
@@ -339,5 +341,14 @@ func TestLocationVersion(t *testing.T) {
 		if got := locationVersion(c.in); got != c.want {
 			t.Errorf("locationVersion(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// writeTestBody writes b from an httptest handler; a write failure cannot
+// fail the test directly, so it is reported and the handler continues.
+func writeTestBody(t *testing.T, w http.ResponseWriter, b []byte) {
+	t.Helper()
+	if _, err := w.Write(b); err != nil {
+		t.Errorf("write test response: %v", err)
 	}
 }

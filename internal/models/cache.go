@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -104,23 +105,29 @@ func saveCacheTo(path string, reg map[string]ModelInfo) error {
 		return fmt.Errorf("models: cache temp file: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after successful rename
+	// Remove is a no-op after the successful rename; on error paths it is a
+	// best-effort cleanup of the leftover temp file.
+	defer func() {
+		if err := os.Remove(tmpName); err != nil {
+			_ = err
+		}
+	}()
 
 	b, err := json.MarshalIndent(cacheData{FetchedAt: time.Now().UTC(), Models: reg}, "", "  ")
 	if err != nil {
-		tmp.Close()
+		bestEffortClose(tmp)
 		return fmt.Errorf("models: encode cache: %w", err)
 	}
 	if _, err := tmp.Write(append(b, '\n')); err != nil {
-		tmp.Close()
+		bestEffortClose(tmp)
 		return fmt.Errorf("models: write cache: %w", err)
 	}
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		bestEffortClose(tmp)
 		return fmt.Errorf("models: chmod cache: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		bestEffortClose(tmp)
 		return fmt.Errorf("models: sync cache: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -130,4 +137,12 @@ func saveCacheTo(path string, reg map[string]ModelInfo) error {
 		return fmt.Errorf("models: install cache %s: %w", path, err)
 	}
 	return nil
+}
+
+// bestEffortClose closes c on a path where the primary error is already being
+// reported; a close failure cannot improve the returned error.
+func bestEffortClose(c io.Closer) {
+	if err := c.Close(); err != nil {
+		_ = err
+	}
 }

@@ -30,11 +30,11 @@ func challengeHTML() string {
 func TestFetchCatalogIDsFallback(t *testing.T) {
 	filtered := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
-		w.Write([]byte(challengeHTML()))
+		writeTestBody(t, w, []byte(challengeHTML()))
 	}))
 	defer filtered.Close()
 	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(catalogHTML("moonshotai/kimi-k3", "nvidia/nemotron-3-ultra-550b-a55b")))
+		writeTestBody(t, w, []byte(catalogHTML("moonshotai/kimi-k3", "nvidia/nemotron-3-ultra-550b-a55b")))
 	}))
 	defer fallback.Close()
 
@@ -56,7 +56,7 @@ func TestGetSendsCatalogCookieSessionsAndHostScoping(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.Header.Get("Cookie"))
 		w.Header().Set("Set-Cookie", "ak_bmsc=session123; Path=/")
-		w.Write([]byte("ok"))
+		writeTestBody(t, w, []byte("ok"))
 	}))
 	defer srv.Close()
 

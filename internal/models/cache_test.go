@@ -61,10 +61,10 @@ func TestLoadCacheCorrupt(t *testing.T) {
 func TestRefreshWritesCache(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/moonshotai/kimi-k3/playground" {
-			w.Write([]byte(`<html>"nvcfFunctionId":"1586112a-925c-48af-8631-7c815dbd749c","namespace":"qc69jvmznzxy"</html>`))
+			writeTestBody(t, w, []byte(`<html>"nvcfFunctionId":"1586112a-925c-48af-8631-7c815dbd749c","namespace":"qc69jvmznzxy"</html>`))
 			return
 		}
-		w.Write([]byte(catalogHTML("moonshotai/kimi-k3")))
+		writeTestBody(t, w, []byte(catalogHTML("moonshotai/kimi-k3")))
 	}))
 	defer srv.Close()
 
@@ -106,5 +106,14 @@ func TestRefreshWritesCache(t *testing.T) {
 	}
 	if !reflect.DeepEqual(after, got) {
 		t.Fatal("failed refresh modified the cache")
+	}
+}
+
+// writeTestBody writes b from an httptest handler; a write failure cannot
+// fail the test directly, so it is reported and the handler continues.
+func writeTestBody(t *testing.T, w http.ResponseWriter, b []byte) {
+	t.Helper()
+	if _, err := w.Write(b); err != nil {
+		t.Errorf("write test response: %v", err)
 	}
 }

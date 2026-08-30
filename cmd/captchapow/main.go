@@ -31,6 +31,15 @@ const (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// run executes the solve; keeping it here lets the deferred cancel run before
+// main exits.
+func run() error {
 	sitekey := flag.String("sitekey", defaultSitekey, "hCaptcha sitekey")
 	host := flag.String("host", defaultHost, "host the captcha is served for")
 	verbose := flag.Bool("v", false, "print per-stage and per-variant diagnostics")
@@ -45,20 +54,18 @@ func main() {
 	if !*verbose && !*raw {
 		token, err := hcaptcha.CaptchaToken(ctx, *sitekey, *host)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		fmt.Println(token)
 		if *verify {
 			verifyUpstream(ctx, token)
 		}
-		return
+		return nil
 	}
 
 	solve, attempts, err := hcaptcha.CaptchaAttempts(ctx, *sitekey, *host)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	fmt.Printf("stage: checksiteconfig=%dms jwt_len=%d location=%q key=%q\n",
 		solve.Elapsed.Milliseconds(), len(solve.JWT), solve.Location, solve.Key)
@@ -91,13 +98,13 @@ func main() {
 	}
 
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "error: no P1_ passcode in any getcaptcha variant; see per-variant status/body above")
-		os.Exit(1)
+		return fmt.Errorf("no P1_ passcode in any getcaptcha variant; see per-variant status/body above")
 	}
 	fmt.Println(token)
 	if *verify {
 		verifyUpstream(ctx, token)
 	}
+	return nil
 }
 
 // verifyUpstream sends one small chat request through the repo's client with

@@ -21,11 +21,13 @@ import (
 const testPowData = "VGhpcyBpcyB0aGUgdGVzdCBwb3cgZGF0YQ=="
 
 // fakeJWT builds a well-formed PoW JWT (unvalidated signature) for the given
-// claims, mirroring checksiteconfig responses.
-func fakeJWT(t *testing.T, difficulty float64, data, loc string) string {
+// claims, mirroring checksiteconfig responses. The difficulty and PoW data
+// claims are fixed at 2.0 and testPowData, matching every offline challenge
+// the tests build.
+func fakeJWT(t *testing.T, loc string) string {
 	t.Helper()
 	payload, err := json.Marshal(map[string]any{
-		"f": 0.0, "s": difficulty, "t": "w", "d": data, "l": loc,
+		"f": 0.0, "s": 2.0, "t": "w", "d": testPowData, "l": loc,
 		"i": "sha256-test-signature", "e": 1712552328.0, "n": "hsw", "c": 1000.0,
 	})
 	if err != nil {
@@ -87,7 +89,7 @@ func TestBuildFingerprint(t *testing.T) {
 		dif = 2.0
 		loc = "/c/282d0ff"
 	)
-	jwt := fakeJWT(t, dif, testPowData, loc)
+	jwt := fakeJWT(t, loc)
 	pow, err := hcaptchapow.ParsePow(jwt)
 	if err != nil {
 		t.Fatalf("ParsePow: %v", err)
@@ -209,28 +211,28 @@ func TestSolveNStopsAtFingerprint(t *testing.T) {
 
 	const loc = "/c/282d0ff"
 	fetchChallenge = func(ctx context.Context, sitekey, host string) (string, string, error) {
-		return fakeJWT(t, 2, testPowData, loc), loc, nil
+		return fakeJWT(t, loc), loc, nil
 	}
 	loadSolver = func(ctx context.Context, location string) (*hsw.Solver, error) {
 		return nil, errors.New("offline: solver download disabled")
 	}
 
-	jwt, location, fpB64, n, elapsed, err := SolveN(context.Background(), "sitekey", "host")
+	res, err := SolveN(context.Background(), "sitekey", "host")
 	if err == nil || !strings.Contains(err.Error(), "load solver") {
 		t.Fatalf("SolveN err = %v, want stage prefix \"load solver\"", err)
 	}
-	if jwt == "" || location != loc || fpB64 == "" {
-		t.Errorf("partial results jwt=%q location=%q fpB64=%q", jwt, location, fpB64)
+	if res.JWT == "" || res.Location != loc || res.Fingerprint == "" {
+		t.Errorf("partial results jwt=%q location=%q fpB64=%q", res.JWT, res.Location, res.Fingerprint)
 	}
-	if n != "" {
-		t.Errorf("n = %q, want empty (solve stage never reached)", n)
+	if res.N != "" {
+		t.Errorf("n = %q, want empty (solve stage never reached)", res.N)
 	}
-	_, doc := decodeFingerprint(t, fpB64)
+	_, doc := decodeFingerprint(t, res.Fingerprint)
 	if doc.ProofSpec.Data != testPowData {
 		t.Errorf("fingerprint data = %q, want %q", doc.ProofSpec.Data, testPowData)
 	}
-	if elapsed <= 0 {
-		t.Errorf("elapsed = %v, want > 0", elapsed)
+	if res.Elapsed <= 0 {
+		t.Errorf("elapsed = %v, want > 0", res.Elapsed)
 	}
 }
 
@@ -257,7 +259,7 @@ func TestSolveNWithFakeSolver(t *testing.T) {
 
 	const loc = "/c/282d0ff"
 	fetchChallenge = func(ctx context.Context, sitekey, host string) (string, string, error) {
-		return fakeJWT(t, 2, testPowData, loc), loc, nil
+		return fakeJWT(t, loc), loc, nil
 	}
 	loads := 0
 	loadSolver = func(ctx context.Context, location string) (*hsw.Solver, error) {
@@ -272,28 +274,28 @@ func TestSolveNWithFakeSolver(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	jwt, location, fpB64, n, _, err := SolveN(ctx, "sitekey", "host")
+	res, err := SolveN(ctx, "sitekey", "host")
 	if err != nil {
 		t.Fatalf("SolveN #1: %v", err)
 	}
-	want := "n:" + strconv.Itoa(len(jwt)) + ":" + strconv.Itoa(len(fpB64))
-	if n != want {
-		t.Fatalf("SolveN #1 n = %q, want %q", n, want)
+	want := "n:" + strconv.Itoa(len(res.JWT)) + ":" + strconv.Itoa(len(res.Fingerprint))
+	if res.N != want {
+		t.Fatalf("SolveN #1 n = %q, want %q", res.N, want)
 	}
-	if location != loc {
-		t.Errorf("location = %q, want %q", location, loc)
+	if res.Location != loc {
+		t.Errorf("location = %q, want %q", res.Location, loc)
 	}
 	if loads != 1 {
 		t.Fatalf("solver loads after #1 = %d, want 1", loads)
 	}
 
-	if _, _, fpB642, n2, _, err := SolveN(ctx, "sitekey", "host"); err != nil {
+	if res2, err := SolveN(ctx, "sitekey", "host"); err != nil {
 		t.Fatalf("SolveN #2: %v", err)
-	} else if want2 := "n:" + strconv.Itoa(len(jwt)) + ":" + strconv.Itoa(len(fpB642)); n2 != want2 {
+	} else if want2 := "n:" + strconv.Itoa(len(res2.JWT)) + ":" + strconv.Itoa(len(res2.Fingerprint)); res2.N != want2 {
 		// fpB64 length varies between solves: the mined stamp's counter hex
 		// width depends on the random salt, so compare against run #2's own
 		// expected value instead of run #1's.
-		t.Errorf("SolveN #2 n = %q, want %q", n2, want2)
+		t.Errorf("SolveN #2 n = %q, want %q", res2.N, want2)
 	}
 	if loads != 1 {
 		t.Errorf("solver loads after #2 = %d, want 1 (cache miss)", loads)
@@ -318,17 +320,17 @@ func TestLive(t *testing.T) {
 		sitekey = "0c6a1e45-75d7-43cc-b836-a0c9d886b8ee"
 		host    = "build.nvidia.com"
 	)
-	jwt, location, fpB64, n, elapsed, err := SolveN(ctx, sitekey, host)
+	res, err := SolveN(ctx, sitekey, host)
 	t.Logf("jwt_len=%d location=%q fpB64_len=%d n_len=%d n_prefix=%q elapsed=%s err=%v",
-		len(jwt), location, len(fpB64), len(n), clip(n, 60), elapsed, err)
+		len(res.JWT), res.Location, len(res.Fingerprint), len(res.N), clip(res.N, 60), res.Elapsed, err)
 	if err != nil {
 		t.Fatalf("SolveN: %v", err)
 	}
-	if jwt == "" || fpB64 == "" || location == "" {
-		t.Fatalf("incomplete solve results: jwt=%d fpB64=%d location=%q", len(jwt), len(fpB64), location)
+	if res.JWT == "" || res.Fingerprint == "" || res.Location == "" {
+		t.Fatalf("incomplete solve results: jwt=%d fpB64=%d location=%q", len(res.JWT), len(res.Fingerprint), res.Location)
 	}
-	if len(n) < 100 {
-		t.Errorf("n suspiciously short: %d", len(n))
+	if len(res.N) < 100 {
+		t.Errorf("n suspiciously short: %d", len(res.N))
 	}
 }
 

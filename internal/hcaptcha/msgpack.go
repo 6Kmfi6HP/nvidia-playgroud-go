@@ -82,7 +82,7 @@ func msgpackEncodeWire(spec string, cipher []byte) []byte {
 // msgpackDecode parses one msgpack value (map/array/scalar). Ext and bin
 // members come back as []byte; ints as int64, uints as uint64, floats as
 // float64. Returns the remaining bytes too for top-level validation.
-func msgpackDecode(b []byte) (any, []byte, error) {
+func msgpackDecode(b []byte) (v any, rest []byte, err error) {
 	if len(b) == 0 {
 		return nil, nil, fmt.Errorf("msgpack: empty input")
 	}
@@ -176,13 +176,13 @@ func msgpackDecode(b []byte) (any, []byte, error) {
 	case tag == 0xd9, tag == 0xda, tag == 0xdb: // str8/16/32
 		return msgpackDecodeStr(b)
 	case tag == 0xc4, tag == 0xc5, tag == 0xc6: // bin8/16/32
-		ln, rest, err := msgpackLen(b, 1)
+		ln, rest, err := msgpackLen(b)
 		if err != nil {
 			return nil, nil, err
 		}
 		return append([]byte(nil), rest[:ln]...), rest[ln:], nil
 	case tag == 0xc7, tag == 0xc8, tag == 0xc9: // ext8/16/32
-		ln, rest, err := msgpackLen(b, 1)
+		ln, rest, err := msgpackLen(b)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -216,7 +216,7 @@ func msgpackDecode(b []byte) (any, []byte, error) {
 	}
 }
 
-func msgpackDecodeArray(rest []byte, n int) (any, []byte, error) {
+func msgpackDecodeArray(rest []byte, n int) (v any, rest2 []byte, err error) {
 	arr := make([]any, 0, n)
 	for i := 0; i < n; i++ {
 		v, r, err := msgpackDecode(rest)
@@ -229,8 +229,8 @@ func msgpackDecodeArray(rest []byte, n int) (any, []byte, error) {
 	return arr, rest, nil
 }
 
-func msgpackDecodeStr(b []byte) (any, []byte, error) {
-	ln, rest, err := msgpackLen(b, 1)
+func msgpackDecodeStr(b []byte) (v any, rest []byte, err error) {
+	ln, rest, err := msgpackLen(b)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -240,9 +240,8 @@ func msgpackDecodeStr(b []byte) (any, []byte, error) {
 	return string(rest[:ln]), rest[ln:], nil
 }
 
-func msgpackDecodeUint(b []byte) (any, []byte, error) {
+func msgpackDecodeUint(b []byte) (v any, rest []byte, err error) {
 	var n uint64
-	var rest []byte
 	switch b[0] {
 	case 0xcc:
 		if len(b) < 2 {
@@ -268,9 +267,8 @@ func msgpackDecodeUint(b []byte) (any, []byte, error) {
 	return n, rest, nil
 }
 
-func msgpackDecodeInt(b []byte) (any, []byte, error) {
+func msgpackDecodeInt(b []byte) (v any, rest []byte, err error) {
 	var n int64
-	var rest []byte
 	switch b[0] {
 	case 0xd0:
 		if len(b) < 2 {
@@ -296,7 +294,7 @@ func msgpackDecodeInt(b []byte) (any, []byte, error) {
 	return n, rest, nil
 }
 
-func msgpackDecodeFloat(b []byte) (any, []byte, error) {
+func msgpackDecodeFloat(b []byte) (v any, rest []byte, err error) {
 	switch b[0] {
 	case 0xca:
 		if len(b) < 5 {
@@ -314,9 +312,9 @@ func msgpackDecodeFloat(b []byte) (any, []byte, error) {
 	return nil, nil, fmt.Errorf("msgpack: not a float")
 }
 
-// msgpackLen reads a length prefix after the tag at b[0]; width selects the
-// field size (1 = 8-bit/16-bit/32-bit based on tag).
-func msgpackLen(b []byte, width int) (int, []byte, error) {
+// msgpackLen reads a length prefix after the tag at b[0]: 8-bit (0xd9/0xc4/
+// 0xc7), 16-bit (0xda/0xc5/0xc8) or 32-bit (0xdb/0xc6/0xc9), selected by tag.
+func msgpackLen(b []byte) (n int, rest []byte, err error) {
 	switch b[0] {
 	case 0xd9, 0xc4, 0xc7:
 		if len(b) < 2 {

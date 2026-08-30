@@ -203,7 +203,7 @@ func main() {
 	}
 
 	catalog := newModelCatalog(nvidia.RegistryModels())
-	models := catalog.get()
+	modelList := catalog.get()
 	authHook := &nvidiaAuthHook{exec: exec, catalog: catalog}
 	core := coreauth.NewManager(tokenStore, nil, authHook)
 	authHook.core = core
@@ -214,7 +214,7 @@ func main() {
 	// Watcher replaces unknown providers with OpenAICompatExecutor and clears
 	// models via UnregisterClient; hooks + reconciler put ours back.
 	cliproxy.SetGlobalModelRegistryHook(&nvidiaModelHook{core: core, exec: exec, catalog: catalog})
-	bindNvidiaRuntime(core, exec, models)
+	bindNvidiaRuntime(core, exec, modelList)
 
 	hooks := cliproxy.Hooks{
 		OnAfterStart: func(_ *cliproxy.Service) {
@@ -222,10 +222,10 @@ func main() {
 			n := bindNvidiaRuntime(core, exec, catalog.get())
 			startNvidiaReconciler(ctx, core, exec, catalog)
 			if *modelRefresh >= 0 {
-				startModelRefresher(ctx, &http.Client{Timeout: 30 * time.Second, Transport: transport}, catalog, core, exec, *modelRefresh)
+				startModelRefresher(ctx, catalog, core, exec, *modelRefresh)
 			}
 			log.Printf("serve %s listening on http://localhost%s (models=%d auth=%d; chat/completions + responses + messages; coalesce=%s max-inflight=%d)",
-				version, *addr, len(models), n, execCoalesce(*coalesceMs), *maxInflight)
+				version, *addr, len(modelList), n, execCoalesce(*coalesceMs), *maxInflight)
 		},
 	}
 

@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
 	"time"
 
 	"glm52-nvidia/internal/models"
@@ -21,9 +20,9 @@ import (
 // syncBootstrap is false; use syncBootstrap=true to block startup until the
 // live catalog is fetched (falling back to the compiled-in snapshot on
 // failure). It then keeps the registry fresh every interval.
-func startModelRefresher(ctx context.Context, client *http.Client, catalog *modelCatalog, core *coreauth.Manager, exec coreauth.ProviderExecutor, interval time.Duration) {
+func startModelRefresher(ctx context.Context, catalog *modelCatalog, core *coreauth.Manager, exec coreauth.ProviderExecutor, interval time.Duration) {
 	go func() {
-		refreshModels(ctx, client, catalog, core, exec)
+		refreshModels(ctx, catalog, core, exec)
 		if interval <= 0 {
 			return
 		}
@@ -34,13 +33,13 @@ func startModelRefresher(ctx context.Context, client *http.Client, catalog *mode
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				refreshModels(ctx, client, catalog, core, exec)
+				refreshModels(ctx, catalog, core, exec)
 			}
 		}
 	}()
 }
 
-func refreshModels(ctx context.Context, client *http.Client, catalog *modelCatalog, core *coreauth.Manager, exec coreauth.ProviderExecutor) {
+func refreshModels(ctx context.Context, catalog *modelCatalog, core *coreauth.Manager, exec coreauth.ProviderExecutor) {
 	// nil selects the package client: the browser-fingerprint (tls-client)
 	// instance when cmd/serve installed one, else the proxied standard client.
 	res, err := models.Refresh(ctx, nil)

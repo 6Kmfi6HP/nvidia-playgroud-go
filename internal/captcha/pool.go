@@ -172,7 +172,7 @@ func (p *Pool) start() {
 }
 
 // shutdownLocked ends the current generation without waiting for its
-// goroutines (they exit on the cancelled generation ctx). p.mu must be held.
+// goroutines (they exit on the canceled generation ctx). p.mu must be held.
 // With dropTokens (idle watchdog), buffered tokens are cleared: a restarted
 // pool should mint fresh ones instead of inheriting near-TTL entries. Close
 // keeps them so a closed pool never consumes a token it already handed out.

@@ -467,13 +467,13 @@ func buildShim(wasmB64 string) string {
 	return replaceAll(shimTemplate, "__HSW_WASM_B64__", wasmB64)
 }
 
-func replaceAll(s, old, new string) string {
+func replaceAll(s, old, repl string) string {
 	for {
 		i := indexOf(s, old)
 		if i < 0 {
 			return s
 		}
-		s = s[:i] + new + s[i+len(old):]
+		s = s[:i] + repl + s[i+len(old):]
 	}
 }
 

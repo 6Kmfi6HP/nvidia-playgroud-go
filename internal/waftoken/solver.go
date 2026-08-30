@@ -38,6 +38,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -162,7 +163,7 @@ func doRequest(ctx context.Context, rawURL, method string, headers map[string]st
 				if dec, e2 := io.ReadAll(gr); e2 == nil {
 					raw = dec
 				}
-				gr.Close()
+				closeBody(gr)
 			}
 		}
 	case "deflate":
@@ -235,13 +236,16 @@ type cryptoConfigFull struct {
 	signalVer  string
 }
 
+// challengeInputs carries one challenge: input/hmac/region arrive in the
+// telemetry "inputs" JSON (unmarshal), while cType/diff/mem are extracted
+// from the challenge script (see extractChallengeInputs).
 type challengeInputs struct {
-	input  string
-	hmac   string
-	region string
-	cType  string
-	diff   int
-	mem    int
+	Input  string `json:"input"`
+	Hmac   string `json:"hmac"`
+	Region string `json:"region"`
+	CType  string
+	Diff   int
+	Mem    int
 }
 
 type telemetryResponse struct {
@@ -293,7 +297,7 @@ func newSession(targetURL, proxy string) *session {
 func (s *session) browserHeaders() map[string]string {
 	h := map[string]string{
 		"Host":                      s.domain,
-		"sec-ch-ua":                 fmt.Sprintf(`"Chromium";v="%s", "Google Chrome";v="%s", "Not-A.Brand";v="8"`, s.chromeVer, s.chromeVer),
+		"sec-ch-ua":                 fmt.Sprintf(`"Chromium";v=%q, "Google Chrome";v=%q, "Not-A.Brand";v="8"`, s.chromeVer, s.chromeVer),
 		"sec-ch-ua-mobile":          "?0",
 		"sec-ch-ua-platform":        `"Windows"`,
 		"upgrade-insecure-requests": "1",
@@ -323,7 +327,7 @@ func (s *session) challengeHeaders() map[string]string {
 		"content-type":       "text/plain;charset=UTF-8",
 		"origin":             "https://" + s.domain,
 		"referer":            "https://" + s.domain + "/",
-		"sec-ch-ua":          fmt.Sprintf(`"Chromium";v="%s", "Google Chrome";v="%s", "Not-A.Brand";v="8"`, s.chromeVer, s.chromeVer),
+		"sec-ch-ua":          fmt.Sprintf(`"Chromium";v=%q, "Google Chrome";v=%q, "Not-A.Brand";v="8"`, s.chromeVer, s.chromeVer),
 		"sec-ch-ua-mobile":   "?0",
 		"sec-ch-ua-platform": `"Windows"`,
 		"sec-fetch-dest":     "empty",
@@ -377,8 +381,11 @@ func (s *session) solve(ctx context.Context) (string, error) {
 		return "", err
 	}
 	key, err := hex.DecodeString(cfg.Key)
-	if err != nil || len(key) != 32 {
-		return "", fmt.Errorf("waftoken: bad AES key: %v", err)
+	if err != nil {
+		return "", fmt.Errorf("waftoken: bad AES key: %w", err)
+	}
+	if len(key) != 32 {
+		return "", fmt.Errorf("waftoken: bad AES key: got %d bytes, want 32", len(key))
 	}
 	s.crypto = &cryptoConfigFull{
 		key:        key,
@@ -429,9 +436,9 @@ func (s *session) solveAndPost(ctx context.Context, ci *challengeInputs) (*telem
 
 	payload := map[string]interface{}{
 		"challenge": map[string]interface{}{
-			"input":  ci.input,
-			"hmac":   ci.hmac,
-			"region": ci.region,
+			"input":  ci.Input,
+			"hmac":   ci.Hmac,
+			"region": ci.Region,
 		},
 		"solution":   solution,
 		"signals":    arr,
@@ -445,22 +452,34 @@ func (s *session) solveAndPost(ctx context.Context, ci *challengeInputs) (*telem
 		payload["existing_token"] = strings.TrimPrefix(strings.Split(tok, ";")[0], "aws-waf-token=")
 	}
 
-	typeName := challengeTypeName(s.crypto.typeNames, ci.cType)
+	typeName := challengeTypeName(s.crypto.typeNames, ci.CType)
 	submitURL := s.baseURL + "/" + typeName
 	headers := s.challengeHeaders()
 
 	var body []byte
 	if typeName == "verify" {
-		body, _ = json.Marshal(payload)
+		body, err = json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("waftoken: marshal verify payload: %w", err)
+		}
 	} else {
 		solutionData := solution
 		payload["solution"] = nil
-		meta, _ := json.Marshal(payload)
+		meta, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("waftoken: marshal solution metadata: %w", err)
+		}
 		var buf bytes.Buffer
 		w := multipart.NewWriter(&buf)
-		w.WriteField("solution_data", solutionData)
-		w.WriteField("solution_metadata", string(meta))
-		w.Close()
+		if err := w.WriteField("solution_data", solutionData); err != nil {
+			return nil, fmt.Errorf("waftoken: multipart solution_data: %w", err)
+		}
+		if err := w.WriteField("solution_metadata", string(meta)); err != nil {
+			return nil, fmt.Errorf("waftoken: multipart solution_metadata: %w", err)
+		}
+		if err := w.Close(); err != nil {
+			return nil, fmt.Errorf("waftoken: close multipart: %w", err)
+		}
 		body = buf.Bytes()
 		headers["content-type"] = w.FormDataContentType()
 	}
@@ -500,8 +519,8 @@ func (s *session) processResponse(ctx context.Context, resp *telemetryResponse, 
 		if err := json.Unmarshal(raw, &ci); err != nil {
 			return "", fmt.Errorf("waftoken: parse new inputs: %w", err)
 		}
-		if ci.mem == 0 {
-			ci.mem = inputs.mem
+		if ci.Mem == 0 {
+			ci.Mem = inputs.Mem
 		}
 		retry, err := s.solveAndPost(ctx, &ci)
 		if err != nil {
@@ -571,8 +590,12 @@ func extractChallengeInputs(script string) *challengeInputs {
 	difficultyRe := regexp.MustCompile(`parseInt\(['"](\d+)['"]\).*?parseInt\(['"](\d+)['"]\)`)
 	var difficulty, memory int
 	if m := difficultyRe.FindStringSubmatch(script); m != nil {
-		fmt.Sscanf(m[1], "%d", &difficulty)
-		fmt.Sscanf(m[2], "%d", &memory)
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			difficulty = n
+		}
+		if n, err := strconv.Atoi(m[2]); err == nil {
+			memory = n
+		}
 	}
 
 	cType := ""
@@ -626,7 +649,7 @@ func extractChallengeInputs(script string) *challengeInputs {
 	if cType == "" && input == "" {
 		return nil
 	}
-	return &challengeInputs{input: input, hmac: hmacVal, region: region, cType: cType, diff: difficulty, mem: memory}
+	return &challengeInputs{Input: input, Hmac: hmacVal, Region: region, CType: cType, Diff: difficulty, Mem: memory}
 }
 
 func challengeTypeName(typeNames map[string]string, hash string) string {
@@ -640,5 +663,13 @@ func challengeTypeName(typeNames map[string]string, hash string) string {
 		return "verify"
 	default:
 		return "mp_verify"
+	}
+}
+
+// closeBody closes c after the body has been read or is being discarded; a
+// close failure has no effect on the data already consumed.
+func closeBody(c io.Closer) {
+	if err := c.Close(); err != nil {
+		_ = err
 	}
 }

@@ -32,11 +32,23 @@ func defaultFingerprint() string {
 		"st": time.Now().Unix(),
 		"md": "",
 	}
-	b, _ := json.Marshal(fp)
+	b, err := json.Marshal(fp)
+	if err != nil {
+		return ""
+	}
 	return base64.StdEncoding.EncodeToString(b)
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}
+
+// run executes the probe. Keeping the work here lets the deferred cancel and
+// solver.Close run before main exits.
+func run() error {
 	sitekey := flag.String("sitekey", "0c6a1e45-75d7-43cc-b836-a0c9d886b8ee", "hCaptcha sitekey")
 	host := flag.String("host", "build.nvidia.com", "host the captcha is served for")
 	location := flag.String("location", "", "hsw.js location (default: from checksiteconfig JWT)")
@@ -54,8 +66,7 @@ func main() {
 		var err error
 		jwt, *location, err = hsw.FetchChallenge(ctx, *sitekey, *host)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			return err
 		}
 		fmt.Printf("challenge jwt: %s... (len %d)\n", clipped(jwt, 40), len(jwt))
 	case strings.Count(*location, ".") == 2:
@@ -64,8 +75,7 @@ func main() {
 		jwt = *location
 		pow, err := hcaptchapow.ParsePow(jwt)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			return err
 		}
 		*location = pow.Location
 	default:
@@ -74,8 +84,7 @@ func main() {
 		var err error
 		jwt, _, err = hsw.FetchChallenge(ctx, *sitekey, *host)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			return err
 		}
 		fmt.Printf("challenge jwt: %s... (len %d)\n", clipped(jwt, 40), len(jwt))
 	}
@@ -89,8 +98,7 @@ func main() {
 	t0 := time.Now()
 	solver, err := hsw.LoadSolver(ctx, *location)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		return err
 	}
 	defer solver.Close()
 	fmt.Printf("bundle version=%s size=%d download=%s\n", solver.Bundle().Version, len(solver.Bundle().Source), time.Since(t0).Round(time.Millisecond))
@@ -99,10 +107,10 @@ func main() {
 	t1 := time.Now()
 	n, err := solver.SolveN(ctx, jwt, fpB64)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "solve error:", err)
-		os.Exit(1)
+		return fmt.Errorf("solve error: %w", err)
 	}
 	fmt.Printf("n: len=%d prefix=%q elapsed=%s\n", len(n), clipped(n, 80), time.Since(t1).Round(time.Millisecond))
+	return nil
 }
 
 func clipped(s string, n int) string {
