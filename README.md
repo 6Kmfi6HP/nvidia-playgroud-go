@@ -346,6 +346,7 @@ nvidia-playgroud-go/
 ├── cmd/serve/            # 多格式网关（chat/completions + responses + messages；模型热刷新）
 ├── cmd/streambench/      # SSE 时序 + 并发实验（-concurrency）
 ├── cmd/cacheprobe/       # 流式时序探针
+├── cmd/hswprobe/         # hsw PoW 调试探针：抓取 hsw.js 经内嵌 V8 求解并打印 n
 ├── scripts/scrape_playground_models.py  # 爬取 playground 模型 + function-id（离线快照用）
 ├── scripts/playground_models.json       # 最近一次抓取结果（11/24）
 ├── runs/                 # 历史实验记录（CAPTCHA PoW、TTFT、hangbench 等）
