@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.26-bookworm AS build
+FROM golang:1.26-trixie AS build
 WORKDIR /src
 
 COPY go.mod go.sum ./
@@ -9,12 +9,14 @@ RUN go mod download
 COPY . .
 ARG VERSION=dev
 # The PoW solver embeds V8 via v8go (cgo): build with CGO_ENABLED=1 so the
-# v8go prebuilt libv8 (glibc) links in. golang:bookworm ships gcc.
+# v8go prebuilt libv8 links in. That prebuilt lib references glibc >= 2.38
+# (__isoc23_* symbols), so both stages use trixie (glibc 2.41), not
+# bookworm (2.36). golang:trixie ships gcc.
 RUN CGO_ENABLED=1 go build -trimpath \
 	-ldflags="-s -w -X main.version=${VERSION}" \
 	-o /out/serve ./cmd/serve
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # 不需要 Chromium：验证码由纯 Go 的 hCaptcha PoW 求解器解决，不依赖任何
 # 浏览器。仅保留 HTTPS 证书与探活工具。
