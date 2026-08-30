@@ -44,7 +44,7 @@ var cacheKeys = []string{
 
 func main() {
 	captchaFlag := flag.String("captcha", "", "one-shot hCaptcha token (only for -rounds=1)")
-	auto := flag.Bool("auto", false, "extract captcha via chromedp (needed for multi-round upstream)")
+	auto := flag.Bool("auto", false, "solve captcha via pure-Go PoW (needed for multi-round upstream)")
 	proxy := flag.String("proxy", "", "hit local OpenAI proxy instead of upstream (e.g. http://localhost:8080)")
 	model := flag.String("model", glm52.DefaultModel, "model id")
 	stream := flag.Bool("stream", true, "use SSE stream (usage usually in final chunk)")
@@ -82,22 +82,12 @@ func main() {
 		endpoint, *model, *stream, *rounds, len(prefix), *thinking)
 	fmt.Printf("looking_for=%v\n", cacheKeys)
 
-	var browser *captcha.Browser
-	if *auto && !viaProxy {
-		b, err := captcha.NewBrowser(ctx, captcha.BrowserConfig{})
-		if err != nil {
-			log.Fatalf("captcha browser: %v", err)
-		}
-		browser = b
-		defer browser.Close()
-	}
-
 	var anyCache bool
 	for i := 1; i <= *rounds; i++ {
 		if ctx.Err() != nil {
 			break
 		}
-		token, err := resolveToken(ctx, browser, *auto, *captchaFlag, viaProxy)
+		token, err := resolveToken(ctx, *auto, *captchaFlag, viaProxy)
 		if err != nil {
 			log.Fatalf("round %d captcha: %v", i, err)
 		}
@@ -147,15 +137,12 @@ func main() {
 	}
 }
 
-func resolveToken(ctx context.Context, browser *captcha.Browser, auto bool, captchaFlag string, viaProxy bool) (string, error) {
+func resolveToken(ctx context.Context, auto bool, captchaFlag string, viaProxy bool) (string, error) {
 	if viaProxy {
 		return "", nil
 	}
-	if browser != nil {
-		return browser.Extract(ctx)
-	}
 	if auto {
-		return captcha.Extract(ctx)
+		return captcha.PowExtract()(ctx)
 	}
 	if captchaFlag != "" {
 		return captchaFlag, nil

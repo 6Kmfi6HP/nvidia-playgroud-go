@@ -5,7 +5,7 @@
 //	# Captcha token mode (reverse-engineered)
 //	go run . -captcha "P1_..."
 //
-//	# Auto-extract captcha token via chromedp (no manual token needed)
+//	# Auto-mint captcha token via pure-Go PoW (no manual token needed)
 //	go run . -auto
 package main
 
@@ -23,7 +23,7 @@ import (
 
 func main() {
 	captcha := flag.String("captcha", "", "hCaptcha token (reverse-engineered mode)")
-	auto := flag.Bool("auto", false, "Auto-extract captcha token via chromedp")
+	auto := flag.Bool("auto", false, "Auto-mint captcha token via pure-Go PoW")
 	model := flag.String("model", "", "model id (e.g. deepseek-ai/deepseek-v4-pro-0813); empty = default (moonshotai/kimi-k3)")
 	prompt := flag.String("prompt", "Explain the meaning of life in one sentence.", "prompt to send")
 	stream := flag.Bool("stream", true, "use streaming")

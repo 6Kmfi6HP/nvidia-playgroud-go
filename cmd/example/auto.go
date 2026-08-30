@@ -6,8 +6,9 @@ import (
 	"glm52-nvidia/internal/captcha"
 )
 
-// extractCaptchaToken loads the NVIDIA Playground, triggers hCaptcha, and
-// extracts the token from data-hcaptcha-response.
+// extractCaptchaToken mints a fresh one-shot token with the pure-Go
+// hCaptcha PoW solver (no browser): it solves the PoW challenge for the
+// NVIDIA Playground sitekey and exchanges it for a P1_ token.
 func extractCaptchaToken(baseCtx context.Context) (string, error) {
-	return captcha.Extract(baseCtx)
+	return captcha.PowExtract()(baseCtx)
 }

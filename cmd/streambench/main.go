@@ -31,7 +31,7 @@ import (
 
 func main() {
 	captchaFlag := flag.String("captcha", "", "one-shot hCaptcha token")
-	auto := flag.Bool("auto", false, "extract captcha via chromedp")
+	auto := flag.Bool("auto", false, "solve captcha via pure-Go PoW")
 	prompt := flag.String("prompt", "Count from 1 to 30, one number per line.", "user prompt")
 	continuous := flag.Bool("continuous-usage", false, "set continuous_usage_stats=true")
 	maxTokens := flag.Int("max-tokens", 256, "max_tokens")
@@ -91,7 +91,7 @@ func resolveToken(ctx context.Context, auto bool, captchaFlag string, viaProxy b
 		return captchaFlag, nil
 	}
 	if auto {
-		return captcha.Extract(ctx)
+		return captcha.PowExtract()(ctx)
 	}
 	if viaProxy {
 		return "", nil // serve -auto / header path

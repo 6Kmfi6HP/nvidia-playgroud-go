@@ -121,7 +121,7 @@ type PoolConfig struct {
 }
 
 // NewPool starts background workers that keep tokens filled up to Size.
-// extract must be safe for concurrent use up to Workers (e.g. Browser.Extract).
+// extract must be safe for concurrent use up to Workers (e.g. PowExtract()).
 func NewPool(parent context.Context, extract ExtractFunc, cfg PoolConfig) *Pool {
 	if cfg.Size < 1 {
 		cfg.Size = 2

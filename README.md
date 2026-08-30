@@ -226,9 +226,7 @@ import "glm52-nvidia/internal/captcha"
 token, err := captcha.PowExtract()(ctx) // = hcaptcha.CaptchaToken(ctx, captcha.PlaygroundSitekey, captcha.PlaygroundHost)
 ```
 
-各阶段（checksiteconfig → 指纹+挖矿 → hsw 求 n → 加密提交 getcaptcha → P1 token）全链路约 1s。实现分布在 `internal/hcaptchapow`（纯 Go 算法）、`internal/hsw`（v8go 运行器）、`internal/hcaptcha`（编排）。已知边界：当前入侵参数未含 motionData；个别站点可能要求动态校验脚本，此时需回退浏览器方案。
-
-> 历史遗留：`internal/captcha` 仍保留 chromedp 浏览器提取（`Extract`/`BrowserGroup`），仅用于旧实验 CLI（`cmd/example -auto`、`cmd/hangbench`、`cmd/cacheprobe`、`cmd/captchaopt`），需要本地 Chrome。网关与 Docker 镜像已不使用它。
+各阶段（checksiteconfig → 指纹+挖矿 → hsw 求 n → 加密提交 getcaptcha → P1 token）全链路约 1s。实现分布在 `internal/hcaptchapow`（纯 Go 算法）、`internal/hsw`（v8go 运行器）、`internal/hcaptcha`（编排）。已知边界：当前入侵参数未含 motionData；个别站点可能要求动态校验脚本，此类站点暂无法用本仓库的纯 Go 路径求解。
 
 ### 方式 3：多格式本地代理（CLIProxyAPI）
 
@@ -311,7 +309,7 @@ docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/nvidia-playgroud-go:latest
 | `CHROME_PROXY` | PoW 求解、模型目录抓取与 WAF token 共用代理（等同 `-proxy`），如 `socks5://host:port`；predict API 始终直连 |
 | `HTTP_PROXY` / `HTTPS_PROXY` | 标准 Go 代理环境变量，同样作用于全部出站请求 |
 
-> 旧版文档中的 `CHROME_PATH` / `CHROMEDP_NO_SANDBOX` / `--shm-size=2g` 仅对已移除的 Chromium 方案有意义，镜像中已无浏览器，无需再设置。
+> 旧版文档中的 `CHROME_PATH` / `CHROMEDP_NO_SANDBOX` / `--shm-size=2g` 仅对已移除的 Chromium 方案有意义；代码库已无任何浏览器路径（captcha 全部走纯 Go PoW），无需再设置这些变量。
 
 ## 发版与镜像
 
@@ -337,7 +335,7 @@ git push origin v0.1.0
 nvidia-playgroud-go/
 ├── types.go              # 类型定义（ChatRequest、Message、Chunk 等，OpenAI-compatible）
 ├── client.go             # 客户端实现（hCaptcha token + SSE 流式，按 model 查表路由）
-├── internal/captcha/     # token 预热池、纯 Go PoW 提取（pow.go）+ 遗留 chromedp 提取
+├── internal/captcha/     # token 预热池、纯 Go PoW 提取（pow.go）
 ├── internal/hcaptchapow/ # 纯 Go hCaptcha PoW 算法（JWT/stamp/CRC32/XXH64，零依赖）
 ├── internal/hsw/         # v8go 内嵌 V8：运行官方 hsw.js 求 n / 加解密
 ├── internal/hcaptcha/    # 无浏览器编排：指纹→n→getcaptcha→P1 token
@@ -347,9 +345,7 @@ nvidia-playgroud-go/
 ├── cmd/example/          # 命令行示例（-captcha / -auto / -smooth-ms 打字机输出）
 ├── cmd/serve/            # 多格式网关（chat/completions + responses + messages；模型热刷新）
 ├── cmd/streambench/      # SSE 时序 + 并发实验（-concurrency）
-├── cmd/hangbench/        # 空闲/突发 token 池行为实验
 ├── cmd/cacheprobe/       # 流式时序探针
-├── cmd/captchaopt/       # 浏览器 captcha 提取调优实验（需本地 Chrome）
 ├── scripts/scrape_playground_models.py  # 爬取 playground 模型 + function-id（离线快照用）
 ├── scripts/playground_models.json       # 最近一次抓取结果（11/24）
 ├── runs/                 # 历史实验记录（CAPTCHA PoW、TTFT、hangbench 等）
