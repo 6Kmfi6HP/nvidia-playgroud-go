@@ -7,18 +7,18 @@ func TestLookupDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup(\"\"): %v", err)
 	}
-	if info.Slug != "glm-5.2" {
-		t.Fatalf("default slug = %q want glm-5.2", info.Slug)
+	if info.Slug != "kimi-k3" {
+		t.Fatalf("default slug = %q want kimi-k3", info.Slug)
 	}
-	if info.FunctionID != "3b9748d8-1d85-40e8-8573-0eeaa63a4b63" {
-		t.Fatalf("default function id = %q want the known GLM id", info.FunctionID)
+	if info.FunctionID != "1586112a-925c-48af-8631-7c815dbd749c" {
+		t.Fatalf("default function id = %q want the known Kimi-K3 id", info.FunctionID)
 	}
 }
 
 func TestLookupKnown(t *testing.T) {
 	cases := map[string]string{
-		"z-ai/glm-5.2":                      "glm-5.2",
-		"deepseek-ai/deepseek-v4-pro":       "deepseek-v4-pro",
+		"moonshotai/kimi-k3":                "kimi-k3",
+		"deepseek-ai/deepseek-v4-pro-0813":  "deepseek-v4-pro-0813",
 		"nvidia/nemotron-3-ultra-550b-a55b": "nemotron-3-ultra-550b-a55b",
 	}
 	for model, wantSlug := range cases {
@@ -51,19 +51,20 @@ func TestLookupUnknown(t *testing.T) {
 }
 
 func TestPredictEndpoint(t *testing.T) {
-	info, _ := Lookup("z-ai/glm-5.2")
-	want := "https://api.ngc.nvidia.com/v2/predict/models/" + Namespace + "/glm-5.2"
+	info, _ := Lookup("moonshotai/kimi-k3")
+	want := PredictBase + "/v2/predict/models/" + Namespace + "/kimi-k3"
 	if got := info.PredictEndpoint(); got != want {
 		t.Fatalf("PredictEndpoint() = %q want %q", got, want)
 	}
 }
 
-// Registry invariants: every entry has a UUID-shaped function id and the shared
-// namespace. Function ids are *usually* unique per model, but NVIDIA does alias
-// some backend versions to the same NVCF function (e.g. the ising-calibration
-// variants share 499210d3…). We log duplicates instead of failing so a legit
-// alias is not mistaken for a scrape bug; the endpoint path (namespace/slug) is
-// what actually distinguishes models, and that IS unique per registry key.
+// Registry invariants: every entry has a UUID-shaped function id and the
+// shared namespace. Function ids are *usually* unique per model, but NVIDIA
+// does alias some backend versions to the same NVCF function (e.g. the
+// ising-calibration variants share 499210d3…). We log duplicates instead of
+// failing so a legit alias is not mistaken for a scrape bug; the endpoint
+// path (namespace/slug) is what actually distinguishes models, and that IS
+// unique per registry key.
 func TestRegistryInvariants(t *testing.T) {
 	seen := map[string]string{} // functionID -> first model
 	for model, info := range Models {
@@ -83,8 +84,8 @@ func TestRegistryInvariants(t *testing.T) {
 		}
 	}
 
-	// Slugs within the shared namespace must be unique — otherwise two models
-	// would collide on the predict URL path.
+	// Slugs within the shared namespace must be unique — otherwise two
+	// models would collide on the predict URL path.
 	slugSeen := map[string]string{}
 	for model, info := range Models {
 		if prev, dup := slugSeen[info.Slug]; dup {

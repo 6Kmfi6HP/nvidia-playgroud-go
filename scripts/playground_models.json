@@ -1,72 +1,27 @@
 {
   "_meta": {
-    "count": 59,
-    "total": 95,
+    "count": 11,
+    "total": 24,
     "namespaces": [
       "qc69jvmznzxy"
     ]
   },
   "models": [
     {
-      "model": "01-ai/yi-large",
-      "slug": "yi-large",
-      "publisher": "01-ai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "23bd454d-b225-49a3-8118-582a62fc51b8",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "abacusai/dracarys-llama-3_1-70b-instruct",
-      "slug": "dracarys-llama-3_1-70b-instruct",
-      "publisher": "abacusai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "d27bf72f-ff2f-4443-95b4-5f06f85f72e5",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "bytedance/seed-oss-36b-instruct",
-      "slug": "seed-oss-36b-instruct",
-      "publisher": "bytedance",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "a29b2935-0a45-4dd8-a1e7-66f9fd5f612b",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "databricks/dbrx-instruct",
-      "slug": "dbrx-instruct",
-      "publisher": "databricks",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "3d6c2ff8-8bfc-4d10-8fd0-b7337288e869",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "deepseek-ai/deepseek-v4-flash",
-      "slug": "deepseek-v4-flash",
+      "model": "deepseek-ai/deepseek-v4-flash-0731",
+      "slug": "deepseek-v4-flash-0731",
       "publisher": "deepseek-ai",
       "namespace": "qc69jvmznzxy",
-      "function_id": "52e1ddb6-c745-4802-93f5-ba012d04c336",
+      "function_id": "281478d0-f307-49f4-9e0f-080b63b16c47",
       "ok": true,
       "source": "playground"
     },
     {
-      "model": "deepseek-ai/deepseek-v4-pro",
-      "slug": "deepseek-v4-pro",
+      "model": "deepseek-ai/deepseek-v4-pro-0813",
+      "slug": "deepseek-v4-pro-0813",
       "publisher": "deepseek-ai",
       "namespace": "qc69jvmznzxy",
-      "function_id": "74f02205-c7ba-438f-b81a-2537955bd7ec",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "google/codegemma-7b",
-      "slug": "codegemma-7b",
-      "publisher": "google",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "7dfc10a8-3cc4-448e-97c1-2213308dc222",
+      "function_id": "6e70713f-4eeb-4ef7-b4f8-2d984f4141f6",
       "ok": true,
       "source": "playground"
     },
@@ -80,137 +35,11 @@
       "source": "playground"
     },
     {
-      "model": "google/gemma-2-2b-it",
-      "slug": "gemma-2-2b-it",
-      "publisher": "google",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "b24f0b9b-17f0-4fbf-bbd6-1d01394652cf",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "google/gemma-2b",
-      "slug": "gemma-2b",
-      "publisher": "google",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "04174188-f742-4069-9e72-d77c2b77d3cb",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "google/gemma-3n-e2b-it",
-      "slug": "gemma-3n-e2b-it",
-      "publisher": "google",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "73a53951-edfe-4e94-89b0-7101a3ba17ee",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "google/gemma-3n-e4b-it",
-      "slug": "gemma-3n-e4b-it",
-      "publisher": "google",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "cff91490-4301-4338-8fc7-66d5c0f913b7",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "google/gemma-4-31b-it",
-      "slug": "gemma-4-31b-it",
-      "publisher": "google",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "48c619ec-c254-48da-8fcc-6ef8a04fed6e",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "google/recurrentgemma-2b",
-      "slug": "recurrentgemma-2b",
-      "publisher": "google",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "2f495340-a99f-4b4b-89bd-1beb003dd896",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "meta/llama-3.2-11b-vision-instruct",
-      "slug": "llama-3.2-11b-vision-instruct",
+      "model": "meta/muse-glimmer-30b",
+      "slug": "muse-glimmer-30b",
       "publisher": "meta",
       "namespace": "qc69jvmznzxy",
-      "function_id": "9fa6fd04-ba2c-4bb3-90b7-ede407a9290f",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "meta/llama-3.2-1b-instruct",
-      "slug": "llama-3.2-1b-instruct",
-      "publisher": "meta",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "d33e2ae1-8d2a-4cf8-b622-c98f8e0e550b",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "meta/llama-3.2-3b-instruct",
-      "slug": "llama-3.2-3b-instruct",
-      "publisher": "meta",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "4f1c926f-42aa-4b52-9ac9-c2a2098e432f",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "meta/llama-3.2-90b-vision-instruct",
-      "slug": "llama-3.2-90b-vision-instruct",
-      "publisher": "meta",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "24e0c62b-f7d0-44ba-8012-012c2a1aaf31",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "meta/llama-3_1-70b-instruct",
-      "slug": "llama-3_1-70b-instruct",
-      "publisher": "meta",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "8f723982-f99d-4978-a0cb-1334163e0e07",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "meta/llama-3_1-8b-instruct",
-      "slug": "llama-3_1-8b-instruct",
-      "publisher": "meta",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "e62a4350-2218-4cf5-9262-112432d239f8",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "meta/llama-3_3-70b-instruct",
-      "slug": "llama-3_3-70b-instruct",
-      "publisher": "meta",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "84eb5de1-166b-4bb4-a01b-4f51bd90aa52",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "meta/llama-4-maverick-17b-128e-instruct",
-      "slug": "llama-4-maverick-17b-128e-instruct",
-      "publisher": "meta",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "2f092df4-a732-4e88-b3a9-337829a9cde7",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "minimaxai/minimax-m2.7",
-      "slug": "minimax-m2.7",
-      "publisher": "minimaxai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "3a2114b5-ba24-4540-8ceb-0cc9acc8647b",
+      "function_id": "fd21cc19-b4ff-4949-ba07-90dd663c416a",
       "ok": true,
       "source": "playground"
     },
@@ -224,56 +53,11 @@
       "source": "playground"
     },
     {
-      "model": "mistralai/ministral-14b-instruct-2512",
-      "slug": "ministral-14b-instruct-2512",
-      "publisher": "mistralai",
+      "model": "moonshotai/kimi-k3",
+      "slug": "kimi-k3",
+      "publisher": "moonshotai",
       "namespace": "qc69jvmznzxy",
-      "function_id": "4c4bd074-0c4b-451b-9ae5-e55e85f28838",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "mistralai/mistral-medium-3.5-128b",
-      "slug": "mistral-medium-3.5-128b",
-      "publisher": "mistralai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "2dedb559-9b17-4038-b4ad-e79e5e27d84f",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "mistralai/mistral-nemotron",
-      "slug": "mistral-nemotron",
-      "publisher": "mistralai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "f81394d8-63c0-4023-afa2-7ad11aa54ca3",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "mistralai/mistral-small-4-119b-2603",
-      "slug": "mistral-small-4-119b-2603",
-      "publisher": "mistralai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "a9343856-38cc-453f-9e65-3f8c856d0555",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "mistralai/mixtral-8x7b-instruct",
-      "slug": "mixtral-8x7b-instruct",
-      "publisher": "mistralai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "a1e53ece-bff4-44d1-8b13-c009e5bf47f6",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "nvidia/ising-calibration-1-35b-a3b",
-      "slug": "ising-calibration-1-35b-a3b",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "499210d3-3bf7-44bf-88b5-9460edfa8a38",
+      "function_id": "1586112a-925c-48af-8631-7c815dbd749c",
       "ok": true,
       "source": "playground"
     },
@@ -287,74 +71,11 @@
       "source": "playground"
     },
     {
-      "model": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
-      "slug": "llama-3.1-nemotron-nano-vl-8b-v1",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "5756401f-7f6e-4a22-bb63-2afc1e1ced06",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "nvidia/llama-3_1-nemotron-nano-8b-v1",
-      "slug": "llama-3_1-nemotron-nano-8b-v1",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "07587d89-2056-4eb8-a448-4b05463d2478",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "nvidia/llama-3_3-nemotron-super-49b-v1",
-      "slug": "llama-3_3-nemotron-super-49b-v1",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "a2646582-44bd-4899-bdf4-acf8c9df702c",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "nvidia/llama-3_3-nemotron-super-49b-v1_5",
-      "slug": "llama-3_3-nemotron-super-49b-v1_5",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "50b12b3b-a571-46a3-968c-c13662f6402e",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "nvidia/mistral-nemo-minitron-8b-8k-instruct",
-      "slug": "mistral-nemo-minitron-8b-8k-instruct",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "5aa06dd2-0a02-4a5d-be4c-bf88e956965d",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "nvidia/nemotron-3-nano-30b-a3b",
-      "slug": "nemotron-3-nano-30b-a3b",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "2b2dcd47-c858-425a-9c04-4cacf2eac993",
-      "ok": true,
-      "source": "playground"
-    },
-    {
       "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
       "slug": "nemotron-3-nano-omni-30b-a3b-reasoning",
       "publisher": "nvidia",
       "namespace": "qc69jvmznzxy",
       "function_id": "c4ed50ff-b5c3-409d-ab57-b79c33f5bb39",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "nvidia/nemotron-3-super-120b-a12b",
-      "slug": "nemotron-3-super-120b-a12b",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "ac74040f-9fc9-4c5e-ac74-279ba5161d69",
       "ok": true,
       "source": "playground"
     },
@@ -368,56 +89,11 @@
       "source": "playground"
     },
     {
-      "model": "nvidia/nemotron-4-340b-instruct",
-      "slug": "nemotron-4-340b-instruct",
+      "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "slug": "nemotron-3.5-lightning-30b-a3b",
       "publisher": "nvidia",
       "namespace": "qc69jvmznzxy",
-      "function_id": "b0fcd392-e905-4ab4-8eb9-aeae95c30b37",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "nvidia/nemotron-mini-4b-instruct",
-      "slug": "nemotron-mini-4b-instruct",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "6fea1bef-f7ac-427e-8764-bb9e42bb8f60",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "nvidia/nemotron-nano-12b-v2-vl",
-      "slug": "nemotron-nano-12b-v2-vl",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "198c1317-7594-4f5f-9292-0340bb6ee15e",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "nvidia/nvidia-nemotron-nano-9b-v2",
-      "slug": "nvidia-nemotron-nano-9b-v2",
-      "publisher": "nvidia",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "3fa6dcd2-7a3f-49da-8c90-2bec3f4523d9",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "openai/gpt-oss-120b",
-      "slug": "gpt-oss-120b",
-      "publisher": "openai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "9fcd3abb-183b-4ef0-b884-663507e5e66e",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "openai/gpt-oss-20b",
-      "slug": "gpt-oss-20b",
-      "publisher": "openai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "24d90582-d41c-4fc6-adc0-53c97f5a710f",
+      "function_id": "0a213807-640b-43fb-bfbf-2919f9b666ad",
       "ok": true,
       "source": "playground"
     },
@@ -429,222 +105,9 @@
       "function_id": "4a8f921c-c99d-4cde-92c1-c92ba9e4c50f",
       "ok": true,
       "source": "playground"
-    },
-    {
-      "model": "qwen/qwen3-next-80b-a3b-instruct",
-      "slug": "qwen3-next-80b-a3b-instruct",
-      "publisher": "qwen",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "e467a0f2-c74f-4c21-8bf8-b977d7895f93",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "qwen/qwen3.5-397b-a17b",
-      "slug": "qwen3.5-397b-a17b",
-      "publisher": "qwen",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "f32596d4-0577-4a17-baf2-034515d1e457",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "sarvamai/sarvam-m",
-      "slug": "sarvam-m",
-      "publisher": "sarvamai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "f798a713-1b19-41fa-9c7e-ad0d8648daef",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "stepfun-ai/step-3.5-flash",
-      "slug": "step-3.5-flash",
-      "publisher": "stepfun-ai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "c64334de-a2b5-49bf-b477-af9d8e86af06",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "stepfun-ai/step-3.7-flash",
-      "slug": "step-3.7-flash",
-      "publisher": "stepfun-ai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "44e35036-2c6d-43c1-b875-e48aa5bf11db",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "thinkingmachines/inkling",
-      "slug": "inkling",
-      "publisher": "thinkingmachines",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "e972e88f-cd11-45ef-86d2-6802da998eca",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "writer/palmyra-creative-122b",
-      "slug": "palmyra-creative-122b",
-      "publisher": "writer",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "00bdd0a7-e38f-4423-9007-c4d8730a3f78",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "writer/palmyra-fin-70b-32k",
-      "slug": "palmyra-fin-70b-32k",
-      "publisher": "writer",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "316490c6-f1ed-41f9-9da8-3fa9e885653b",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "writer/palmyra-med-70b",
-      "slug": "palmyra-med-70b",
-      "publisher": "writer",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "aab71274-5281-4941-b0b8-20f339d1fc7e",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "writer/palmyra-med-70b-32k",
-      "slug": "palmyra-med-70b-32k",
-      "publisher": "writer",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "d6faa974-3591-49a4-963d-97221d074b2e",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "z-ai/glm-5.2",
-      "slug": "glm-5.2",
-      "publisher": "z-ai",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "3b9748d8-1d85-40e8-8573-0eeaa63a4b63",
-      "ok": true,
-      "source": "playground"
-    },
-    {
-      "model": "zyphra/zamba2-7b-instruct",
-      "slug": "zamba2-7b-instruct",
-      "publisher": "zyphra",
-      "namespace": "qc69jvmznzxy",
-      "function_id": "8378ffb2-51b0-4140-9684-dda1889373e6",
-      "ok": true,
-      "source": "playground"
     }
   ],
   "skipped": [
-    {
-      "model": "baai/bge-m3",
-      "slug": "bge-m3",
-      "publisher": "baai",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "black-forest-labs/flux_1-dev",
-      "slug": "flux_1-dev",
-      "publisher": "black-forest-labs",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "black-forest-labs/flux_1-kontext-dev",
-      "slug": "flux_1-kontext-dev",
-      "publisher": "black-forest-labs",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "black-forest-labs/flux_1-schnell",
-      "slug": "flux_1-schnell",
-      "publisher": "black-forest-labs",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "black-forest-labs/flux_2-klein-4b",
-      "slug": "flux_2-klein-4b",
-      "publisher": "black-forest-labs",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "google/google-paligemma",
-      "slug": "google-paligemma",
-      "publisher": "google",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "meta/esm2-650m",
-      "slug": "esm2-650m",
-      "publisher": "meta",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "meta/esmfold",
-      "slug": "esmfold",
-      "publisher": "meta",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "meta/llama-guard-4-12b",
-      "slug": "llama-guard-4-12b",
-      "publisher": "meta",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "moonshotai/kimi-k2.6",
-      "slug": "kimi-k2.6",
-      "publisher": "moonshotai",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/active-speaker-detection",
-      "slug": "active-speaker-detection",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/bevformer",
-      "slug": "bevformer",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/bnr",
-      "slug": "bnr",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/cosmos-transfer1-7b",
-      "slug": "cosmos-transfer1-7b",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/cosmos-transfer2_5-2b",
-      "slug": "cosmos-transfer2_5-2b",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
     {
       "model": "nvidia/cosmos3-nano",
       "slug": "cosmos3-nano",
@@ -655,41 +118,6 @@
     {
       "model": "nvidia/cosmos3-nano-reasoner",
       "slug": "cosmos3-nano-reasoner",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/gliner-pii",
-      "slug": "gliner-pii",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/llama-3_1-nemotron-safety-guard-8b-v3",
-      "slug": "llama-3_1-nemotron-safety-guard-8b-v3",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/llama-nemotron-embed-vl-1b-v2",
-      "slug": "llama-nemotron-embed-vl-1b-v2",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/llama-nemotron-rerank-vl-1b-v2",
-      "slug": "llama-nemotron-rerank-vl-1b-v2",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/magpie-tts-zeroshot",
-      "slug": "magpie-tts-zeroshot",
       "publisher": "nvidia",
       "ok": false,
       "reason": "no nvcfFunctionId in playground HTML"
@@ -709,72 +137,37 @@
       "reason": "no nvcfFunctionId in playground HTML"
     },
     {
-      "model": "nvidia/nemotron-voicechat",
-      "slug": "nemotron-voicechat",
+      "model": "nvidia/nemotron-ocr-v2",
+      "slug": "nemotron-ocr-v2",
       "publisher": "nvidia",
       "ok": false,
       "reason": "no nvcfFunctionId in playground HTML"
     },
     {
-      "model": "nvidia/nv-embed-v1",
-      "slug": "nv-embed-v1",
+      "model": "nvidia/qwen-image-edit-nvpcb-ovsl2sl",
+      "slug": "qwen-image-edit-nvpcb-ovsl2sl",
       "publisher": "nvidia",
       "ok": false,
       "reason": "no nvcfFunctionId in playground HTML"
     },
     {
-      "model": "nvidia/nv-embedcode-7b-v1",
-      "slug": "nv-embedcode-7b-v1",
+      "model": "nvidia/relighting",
+      "slug": "relighting",
       "publisher": "nvidia",
       "ok": false,
       "reason": "no nvcfFunctionId in playground HTML"
     },
     {
-      "model": "nvidia/rerank-qa-mistral-4b",
-      "slug": "rerank-qa-mistral-4b",
+      "model": "nvidia/riva-translate-4b-instruct-v2",
+      "slug": "riva-translate-4b-instruct-v2",
       "publisher": "nvidia",
       "ok": false,
       "reason": "no nvcfFunctionId in playground HTML"
     },
     {
-      "model": "nvidia/riva-translate-4b-instruct-v1_1",
-      "slug": "riva-translate-4b-instruct-v1_1",
+      "model": "nvidia/vsr",
+      "slug": "vsr",
       "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/sparsedrive",
-      "slug": "sparsedrive",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/streampetr",
-      "slug": "streampetr",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/studiovoice",
-      "slug": "studiovoice",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "nvidia/synthetic-video-detector",
-      "slug": "synthetic-video-detector",
-      "publisher": "nvidia",
-      "ok": false,
-      "reason": "no nvcfFunctionId in playground HTML"
-    },
-    {
-      "model": "openai/whisper-large-v3",
-      "slug": "whisper-large-v3",
-      "publisher": "openai",
       "ok": false,
       "reason": "no nvcfFunctionId in playground HTML"
     },
@@ -786,9 +179,23 @@
       "reason": "no nvcfFunctionId in playground HTML"
     },
     {
-      "model": "upstage/solar-10_7b-instruct",
-      "slug": "solar-10_7b-instruct",
-      "publisher": "upstage",
+      "model": "qwen/qwen-image-edit",
+      "slug": "qwen-image-edit",
+      "publisher": "qwen",
+      "ok": false,
+      "reason": "no nvcfFunctionId in playground HTML"
+    },
+    {
+      "model": "resembleai/chatterbox-multilingual-tts",
+      "slug": "chatterbox-multilingual-tts",
+      "publisher": "resembleai",
+      "ok": false,
+      "reason": "no nvcfFunctionId in playground HTML"
+    },
+    {
+      "model": "wan-ai/wan2.2-animate-2-14b",
+      "slug": "wan2.2-animate-2-14b",
+      "publisher": "wan-ai",
       "ok": false,
       "reason": "no nvcfFunctionId in playground HTML"
     }

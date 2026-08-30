@@ -162,18 +162,23 @@ func (e *ErrorResponse) Error() string {
 // --- constants ---
 
 const (
-	// DefaultModel is the GLM-5.2 model identifier used by NVIDIA NIM.
-	DefaultModel = "z-ai/glm-5.2"
+	// DefaultModel is the default playground model id (the historical
+	// z-ai/glm-5.2 was removed from NVIDIA's anonymous catalog in 2026-08).
+	DefaultModel = "moonshotai/kimi-k3"
 
-	// PredictEndpoint is the reverse-engineered Playground API endpoint.
-	PredictEndpoint = "https://api.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/glm-5.2"
+	// PredictEndpoint is the reverse-engineered Playground API endpoint
+	// (buildapi gateway used since 2026-08; api.ngc.nvidia.com 404s now).
+	PredictEndpoint = "https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/kimi-k3"
 
-	// NVFunctionID is the static NVCF function identifier for GLM-5.2.
-	NVFunctionID = "3b9748d8-1d85-40e8-8573-0eeaa63a4b63"
+	// NVFunctionID is the static NVCF function identifier for the default
+	// model.
+	NVFunctionID = "1586112a-925c-48af-8631-7c815dbd749c"
 
 	defaultMaxTokens = 16384
 	defaultSeed      = 42
 	defaultTemp      = 1.0
-	defaultTopP      = 1.0
-	requestTimeout   = 120 * time.Second
+	// top_p is omitted by default: several 2026-08 catalog models
+	// (e.g. kimi-k3) reject it with 400 from the grpc backend.
+	defaultTopP    = 0.0
+	requestTimeout = 120 * time.Second
 )

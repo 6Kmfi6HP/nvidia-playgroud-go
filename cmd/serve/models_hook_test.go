@@ -21,7 +21,7 @@ func TestNvidiaModelHookReregisters(t *testing.T) {
 	t.Cleanup(func() { reg.UnregisterClient(clientID) })
 
 	reg.UnregisterClient(clientID)
-	hook := &nvidiaModelHook{models: models}
+	hook := &nvidiaModelHook{catalog: newModelCatalog(models)}
 	hook.OnModelsUnregistered(context.Background(), nvidiaProvider, clientID)
 
 	got := reg.GetAvailableModelsByProvider(nvidiaProvider)

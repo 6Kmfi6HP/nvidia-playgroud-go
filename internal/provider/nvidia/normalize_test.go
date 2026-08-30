@@ -47,7 +47,7 @@ func TestNormalizeRequestBodyEmptyOrNullKwargs(t *testing.T) {
 }
 
 func TestNormalizeRequestBodyPreservesThinking(t *testing.T) {
-	in := []byte(`{"model":"qwen/qwen3.5-397b-a17b","stream":false,"chat_template_kwargs":{"enable_thinking":false}}`)
+	in := []byte(`{"model":"google/diffusiongemma-26b-a4b-it","stream":false,"chat_template_kwargs":{"enable_thinking":false}}`)
 	out, err := NormalizeRequestBody(in)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestNormalizeThinkingKwargsAliases(t *testing.T) {
 	}{
 		{
 			name: "zai thinking enabled",
-			in:   `{"model":"z-ai/glm-5.2","stream":false,"thinking":{"type":"enabled","clear_thinking":false}}`,
+			in:   `{"model":"google/diffusiongemma-26b-a4b-it","stream":false,"thinking":{"type":"enabled","clear_thinking":false}}`,
 			want: map[string]any{
 				"enable_thinking": true,
 				"clear_thinking":  false,
@@ -80,7 +80,7 @@ func TestNormalizeThinkingKwargsAliases(t *testing.T) {
 		},
 		{
 			name: "zai thinking disabled",
-			in:   `{"model":"z-ai/glm-5.2","stream":false,"thinking":{"type":"disabled"}}`,
+			in:   `{"model":"google/diffusiongemma-26b-a4b-it","stream":false,"thinking":{"type":"disabled"}}`,
 			want: map[string]any{
 				"enable_thinking": false,
 			},
@@ -88,7 +88,7 @@ func TestNormalizeThinkingKwargsAliases(t *testing.T) {
 		},
 		{
 			name: "top-level enable_thinking false",
-			in:   `{"model":"qwen/qwen3.5-397b-a17b","stream":false,"enable_thinking":false}`,
+			in:   `{"model":"google/diffusiongemma-26b-a4b-it","stream":false,"enable_thinking":false}`,
 			want: map[string]any{
 				"enable_thinking": false,
 			},
@@ -96,16 +96,15 @@ func TestNormalizeThinkingKwargsAliases(t *testing.T) {
 		},
 		{
 			name: "top-level enable_thinking true + effort",
-			in:   `{"model":"z-ai/glm-5.2","stream":false,"enable_thinking":true,"reasoning_effort":"high"}`,
+			in:   `{"model":"google/diffusiongemma-26b-a4b-it","stream":false,"enable_thinking":true,"reasoning_effort":"high"}`,
 			want: map[string]any{
-				"enable_thinking":  true,
-				"reasoning_effort": "high",
+				"enable_thinking": true,
 			},
 			stripped: []string{"enable_thinking", "reasoning_effort"},
 		},
 		{
 			name: "kwargs wins over aliases",
-			in:   `{"model":"qwen/qwen3.5-397b-a17b","stream":false,"chat_template_kwargs":{"enable_thinking":false},"thinking":{"type":"enabled"},"enable_thinking":true}`,
+			in:   `{"model":"google/diffusiongemma-26b-a4b-it","stream":false,"chat_template_kwargs":{"enable_thinking":false},"thinking":{"type":"enabled"},"enable_thinking":true}`,
 			want: map[string]any{
 				"enable_thinking": false,
 			},
@@ -113,7 +112,7 @@ func TestNormalizeThinkingKwargsAliases(t *testing.T) {
 		},
 		{
 			name: "disabled thinking removes conflicting effort",
-			in:   `{"model":"z-ai/glm-5.2","stream":false,"chat_template_kwargs":{"enable_thinking":false},"reasoning_effort":"high"}`,
+			in:   `{"model":"google/diffusiongemma-26b-a4b-it","stream":false,"chat_template_kwargs":{"enable_thinking":false},"reasoning_effort":"high"}`,
 			want: map[string]any{
 				"enable_thinking": false,
 			},
@@ -156,15 +155,15 @@ func TestNormalizeRequestBodyMapsReasoningEffortByModel(t *testing.T) {
 		key   string
 		want  any
 	}{
-		{name: "deepseek low rounds up to high", model: "deepseek-ai/deepseek-v4-pro", in: "low", key: "reasoning_effort", want: "high"},
-		{name: "deepseek medium rounds up to high", model: "deepseek-ai/deepseek-v4-flash", in: "medium", key: "reasoning_effort", want: "high"},
-		{name: "deepseek xhigh rounds up to max", model: "deepseek-ai/deepseek-v4-pro", in: "xhigh", key: "reasoning_effort", want: "max"},
-		{name: "gpt oss max caps at high", model: "openai/gpt-oss-120b", in: "max", key: "reasoning_effort", want: "high"},
-		{name: "mistral low rounds up to high", model: "mistralai/mistral-medium-3.5-128b", in: "low", key: "reasoning_effort", want: "high"},
-		{name: "nemotron super medium rounds up to high", model: "nvidia/nemotron-3-super-120b-a12b", in: "medium", key: "reasoning_effort", want: "high"},
-		{name: "nemotron ultra low rounds up to medium", model: "nvidia/nemotron-3-ultra-550b-a55b", in: "low", key: "reasoning_effort", want: "medium"},
-		{name: "qwen none disables thinking", model: "qwen/qwen3.5-397b-a17b", in: "none", key: "enable_thinking", want: false},
-		{name: "qwen high enables thinking", model: "qwen/qwen3.5-397b-a17b", in: "high", key: "enable_thinking", want: true},
+		{name: "deepseek low rounds up to high", model: "deepseek-ai/deepseek-v4-pro-0813", in: "low", key: "reasoning_effort", want: "high"},
+		{name: "deepseek medium rounds up to high", model: "deepseek-ai/deepseek-v4-flash-0731", in: "medium", key: "reasoning_effort", want: "high"},
+		{name: "deepseek xhigh rounds up to max", model: "deepseek-ai/deepseek-v4-pro-0813", in: "xhigh", key: "reasoning_effort", want: "max"},
+		{name: "nemotron ultra max caps at high", model: "nvidia/nemotron-3-ultra-550b-a55b", in: "max", key: "reasoning_effort", want: "high"},
+		{name: "diffusiongemma high enables thinking", model: "google/diffusiongemma-26b-a4b-it", in: "high", key: "enable_thinking", want: true},
+		{name: "diffusiongemma none disables thinking", model: "google/diffusiongemma-26b-a4b-it", in: "none", key: "enable_thinking", want: false},
+		{name: "diffusiongemma high enables thinking", model: "google/diffusiongemma-26b-a4b-it", in: "high", key: "enable_thinking", want: true},
+		{name: "qwen none disables thinking", model: "google/diffusiongemma-26b-a4b-it", in: "none", key: "enable_thinking", want: false},
+		{name: "qwen high enables thinking", model: "google/diffusiongemma-26b-a4b-it", in: "high", key: "enable_thinking", want: true},
 		{name: "minimax medium uses adaptive thinking", model: "minimaxai/minimax-m3", in: "medium", key: "thinking_mode", want: "adaptive"},
 		{name: "minimax xhigh enables thinking", model: "minimaxai/minimax-m3", in: "xhigh", key: "thinking_mode", want: "enabled"},
 	}

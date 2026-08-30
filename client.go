@@ -136,6 +136,14 @@ func (c *Client) applyDefaults(r *ChatRequest) {
 		enable := true
 		if c.thinking != nil {
 			enable = *c.thinking
+		} else {
+			// Only inject thinking kwargs for models known to accept them
+			// (Capability.Thinking). Most of the current anonymous catalog
+			// (kimi-k3 etc.) rejects chat_template_kwargs with 400.
+			info, err := models.Lookup(r.Model)
+			if err != nil || info.Capability == nil || !info.Capability.Thinking {
+				return
+			}
 		}
 		if enable {
 			r.ChatTemplateKwargs = map[string]any{

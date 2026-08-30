@@ -17,21 +17,16 @@ type reasoningProfile struct {
 	defaultLevel string
 }
 
+// reasoningProfiles is keyed by registry model ids. Models removed from the
+// anonymous catalog in 2026-08 (glm-5.2, gpt-oss-*, qwen3.5-397b, ...) were
+// dropped together with their profiles; refresh this map when the catalog
+// changes (TestReasoningProfilesReferenceRegisteredModels enforces it).
 var reasoningProfiles = map[string]reasoningProfile{
-	"deepseek-ai/deepseek-v4-flash":       {kind: reasoningEffort, levels: []string{"none", "high", "max"}, defaultLevel: "high"},
-	"deepseek-ai/deepseek-v4-pro":         {kind: reasoningEffort, levels: []string{"none", "high", "max"}, defaultLevel: "high"},
-	"mistralai/mistral-medium-3.5-128b":   {kind: reasoningEffort, levels: []string{"none", "high"}, defaultLevel: "high"},
-	"mistralai/mistral-small-4-119b-2603": {kind: reasoningEffort, levels: []string{"none", "high"}, defaultLevel: "high"},
-	"nvidia/nemotron-3-super-120b-a12b":   {kind: reasoningEffort, levels: []string{"none", "low", "high"}, defaultLevel: "high"},
-	"nvidia/nemotron-3-ultra-550b-a55b":   {kind: reasoningEffort, levels: []string{"none", "medium", "high"}, defaultLevel: "high"},
-	"openai/gpt-oss-120b":                 {kind: reasoningEffort, levels: []string{"low", "medium", "high"}, defaultLevel: "medium"},
-	"openai/gpt-oss-20b":                  {kind: reasoningEffort, levels: []string{"low", "medium", "high"}, defaultLevel: "medium"},
-	"google/diffusiongemma-26b-a4b-it":    {kind: reasoningToggle},
-	"nvidia/nemotron-3-nano-30b-a3b":      {kind: reasoningToggle},
-	"qwen/qwen3.5-397b-a17b":              {kind: reasoningToggle},
-	"sarvamai/sarvam-m":                   {kind: reasoningToggle},
-	"z-ai/glm-5.2":                        {kind: reasoningEffortAndToggle, levels: []string{"low", "medium", "high"}, defaultLevel: "high"},
-	"minimaxai/minimax-m3":                {kind: reasoningMiniMax},
+	"deepseek-ai/deepseek-v4-flash-0731": {kind: reasoningEffort, levels: []string{"none", "high", "max"}, defaultLevel: "high"},
+	"deepseek-ai/deepseek-v4-pro-0813":   {kind: reasoningEffort, levels: []string{"none", "high", "max"}, defaultLevel: "high"},
+	"nvidia/nemotron-3-ultra-550b-a55b":  {kind: reasoningEffort, levels: []string{"none", "medium", "high"}, defaultLevel: "high"},
+	"google/diffusiongemma-26b-a4b-it":   {kind: reasoningToggle},
+	"minimaxai/minimax-m3":               {kind: reasoningMiniMax},
 }
 
 var effortRanks = map[string]int{

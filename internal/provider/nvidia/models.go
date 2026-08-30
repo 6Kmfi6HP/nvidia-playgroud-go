@@ -11,8 +11,9 @@ import (
 
 // RegistryModels returns cliproxy ModelInfo entries for every playground model.
 func RegistryModels() []*cliproxy.ModelInfo {
-	ids := make([]string, 0, len(models.Models))
-	for id := range models.Models {
+	registry := models.All()
+	ids := make([]string, 0, len(registry))
+	for id := range registry {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)

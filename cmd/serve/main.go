@@ -56,6 +56,7 @@ func main() {
 	warmTimeout := flag.Duration("warm-timeout", 3*time.Minute, "wait for at least one pooled captcha before serving (-auto); 0=skip")
 	poolTTL := flag.Duration("pool-ttl", 90*time.Second, "discard pooled captcha tokens older than this (-auto)")
 	captchaWait := flag.Duration("captcha-wait", 30*time.Second, "max wait for a pooled captcha token per request (0=block until ready); then 503")
+	modelRefresh := flag.Duration("model-refresh", 6*time.Hour, "re-scrape build.nvidia.com for the playground model catalog on this interval (0=fetch once at startup; <0=keep the compiled-in snapshot)")
 	chromeProxy := flag.String("chrome-proxy", "", "proxy for captcha Chrome and upstream API (e.g. socks5://host:port); falls back to CHROME_PROXY")
 	flag.Parse()
 
@@ -152,8 +153,9 @@ func main() {
 		dirSetter.SetBaseDir(cfg.AuthDir)
 	}
 
-	models := nvidia.RegistryModels()
-	authHook := &nvidiaAuthHook{exec: exec, models: models}
+	catalog := newModelCatalog(nvidia.RegistryModels())
+	models := catalog.get()
+	authHook := &nvidiaAuthHook{exec: exec, catalog: catalog}
 	core := coreauth.NewManager(tokenStore, nil, authHook)
 	authHook.core = core
 	core.RegisterExecutor(exec)
@@ -162,14 +164,17 @@ func main() {
 
 	// Watcher replaces unknown providers with OpenAICompatExecutor and clears
 	// models via UnregisterClient; hooks + reconciler put ours back.
-	cliproxy.SetGlobalModelRegistryHook(&nvidiaModelHook{core: core, exec: exec, models: models})
+	cliproxy.SetGlobalModelRegistryHook(&nvidiaModelHook{core: core, exec: exec, catalog: catalog})
 	bindNvidiaRuntime(core, exec, models)
 
 	hooks := cliproxy.Hooks{
 		OnAfterStart: func(_ *cliproxy.Service) {
 			ensureNvidiaAuth(core)
-			n := bindNvidiaRuntime(core, exec, models)
-			startNvidiaReconciler(ctx, core, exec, models)
+			n := bindNvidiaRuntime(core, exec, catalog.get())
+			startNvidiaReconciler(ctx, core, exec, catalog)
+			if *modelRefresh >= 0 {
+				startModelRefresher(ctx, &http.Client{Timeout: 30 * time.Second, Transport: transport}, catalog, core, exec, *modelRefresh)
+			}
 			log.Printf("serve %s listening on http://localhost%s (models=%d auth=%d; chat/completions + responses + messages; coalesce=%s max-inflight=%d)",
 				version, *addr, len(models), n, execCoalesce(*coalesceMs), *maxInflight)
 		},

@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 """Scrape https://build.nvidia.com/models for the complete NIM model registry.
 
-Data source:
-  https://build.nvidia.com/models?pageSize=200\
-  &filters=nimType%3Anim_type_preview%2CnimType%3Anim_type_upgrade_available
+The legacy ?pageSize=200&filters=... URL has returned an empty body since
+2026-08; the current page server-renders the catalog in Next flight data:
+  totalCount: N, "resources":[{"resourceId":"qc69jvmznzxy/<slug>",...}]
+and model cards are <a href="/{publisher}/{slug}"> links. Each model's
+playground page still inlines "nvcfFunctionId" + "namespace".
 
-  The filter URL shows only models with interactive playgrounds (preview
-  status or upgrade available).  The page server-side renders every model
-  card as an <a> link with href="/{publisher}/{slug}".  We fetch the HTML,
-  extract all model URLs, then probe each model's playground page for the
-  server-rendered NVCF function id and namespace.
-
-  Only models whose playground page contains a valid UUID-shaped
-  "nvcfFunctionId" are reported as ok=true -- those are the ones that can
-  be called via the anonymous (hCaptcha-gated) predict endpoint.
+Only models whose playground page contains a valid UUID-shaped
+"nvcfFunctionId" are reported as ok=true -- those are the ones that can
+be called via the anonymous (hCaptcha-gated) predict endpoint.
 
 Output (stdout): JSON with _meta and sorted `models` + `skipped` arrays.
 Output (stderr): summary counts.
@@ -25,18 +21,24 @@ import urllib.request
 import concurrent.futures as cf
 import time
 
-MODELS_PAGE = "https://build.nvidia.com/models?pageSize=200&filters=nimType%3Anim_type_preview%2CnimType%3Anim_type_upgrade_available"
+MODELS_PAGE = "https://build.nvidia.com/models"
 PLAYGROUND = "https://build.nvidia.com/{publisher}/{slug}/playground"
+UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 FNID_RE = re.compile(r'"nvcfFunctionId\\?":\\?"([a-f0-9-]{36})\\"?')
 NS_RE = re.compile(r'"namespace\\?":\\?"([0-9a-z]+)\\"?')
+# resource id embedded in flight data: "resourceId":"qc69jvmznzxy/<slug>"
+RES_ID_RE = re.compile(r'qc69jvmznzxy/([A-Za-z0-9_.+\-~]+)')
+# model card links: <a href="/publisher/slug">
+LINK_RE = re.compile(r'href="/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.+\-~]+)"')
 
 
 def fetch(url, timeout=25, tries=3):
     last = None
     for _ in range(tries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read().decode("utf-8", "replace")
         except Exception as e:
@@ -47,21 +49,22 @@ def fetch(url, timeout=25, tries=3):
 
 def get_models_from_page():
     """Fetch the Models page and return a dict {slug: publisher} for every
-    model card rendered.  Filters out non-model paths (/models/*, /explore/*,
-    etc.)."""
+    model card rendered. Restricts to slugs that appear in the flight-data
+    resources list; filters out non-model paths (/models/*, /explore/*, ...)."""
     html = fetch(MODELS_PAGE)
-    models = {}  # slug -> publisher
-    # Find all <a href="/publisher/slug"> links that are model cards
-    for m in re.finditer(r'href="/([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+)"', html):
+    slugs = set(RES_ID_RE.findall(html))
+    pairs = {}
+    for m in LINK_RE.finditer(html):
         pub = m.group(1)
         slug = m.group(2)
-        # Filter out non-model paths
         if pub in ("models", "explore", "blueprints", "skills", "_next", ""):
             continue
         if slug in ("playground", "", "community"):
             continue
-        models[slug] = pub
-    return models
+        if slugs and slug not in slugs:
+            continue
+        pairs.setdefault(slug, pub)
+    return pairs
 
 
 def probe_playground(publisher, slug):
@@ -81,11 +84,10 @@ def probe_playground(publisher, slug):
 
 
 def main():
-    sys.stderr.write("# Fetching models page (pageSize=200)...\n")
+    sys.stderr.write("# Fetching models page...\n")
     slug_pub = get_models_from_page()
     sys.stderr.write(f"#   {len(slug_pub)} models found\n")
 
-    # Probe all playground pages concurrently
     sys.stderr.write("# Probing playground pages for NVCF ids...\n")
     results = []
     with cf.ThreadPoolExecutor(max_workers=12) as ex:

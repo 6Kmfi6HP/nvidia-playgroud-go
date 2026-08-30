@@ -63,8 +63,19 @@ func TestBuildRequestUsesCaptchaAuthentication(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultsEnablesThinking(t *testing.T) {
+func TestApplyDefaultsSkipsThinkingForUnverifiedModel(t *testing.T) {
+	// The default model (kimi-k3) has no Capability.Thinking hint, so the
+	// client must NOT inject chat_template_kwargs (upstream 400s on it).
 	client := New(WithCaptchaToken("t"))
+	req := &ChatRequest{Messages: []Message{{Role: RoleUser, Content: "Hi"}}}
+	client.applyDefaults(req)
+	if len(req.ChatTemplateKwargs) != 0 {
+		t.Fatalf("chat_template_kwargs = %#v, want none for unverified model", req.ChatTemplateKwargs)
+	}
+}
+
+func TestApplyDefaultsEnablesThinkingWhenExplicit(t *testing.T) {
+	client := New(WithCaptchaToken("t"), WithThinking(true))
 	req := &ChatRequest{Messages: []Message{{Role: RoleUser, Content: "Hi"}}}
 	client.applyDefaults(req)
 	if req.ChatTemplateKwargs["enable_thinking"] != true {
@@ -96,8 +107,8 @@ func TestApplyDefaultsPreservesCallerKwargs(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultsFillsEmptyKwargs(t *testing.T) {
-	client := New(WithCaptchaToken("t"))
+func TestApplyDefaultsFillsEmptyKwargsWhenExplicit(t *testing.T) {
+	client := New(WithCaptchaToken("t"), WithThinking(true))
 	req := &ChatRequest{
 		Messages:           []Message{{Role: RoleUser, Content: "Hi"}},
 		ChatTemplateKwargs: map[string]any{},
@@ -117,13 +128,13 @@ func TestBuildRequestRoutesPerModel(t *testing.T) {
 		endpoint string
 		fnID     string
 	}{
-		"z-ai/glm-5.2": {
-			"https://api.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/glm-5.2",
-			"3b9748d8-1d85-40e8-8573-0eeaa63a4b63",
+		"moonshotai/kimi-k3": {
+			"https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/kimi-k3",
+			"1586112a-925c-48af-8631-7c815dbd749c",
 		},
-		"deepseek-ai/deepseek-v4-pro": {
-			"https://api.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/deepseek-v4-pro",
-			"74f02205-c7ba-438f-b81a-2537955bd7ec",
+		"deepseek-ai/deepseek-v4-pro-0813": {
+			"https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/deepseek-v4-pro-0813",
+			"6e70713f-4eeb-4ef7-b4f8-2d984f4141f6",
 		},
 	}
 	for model, want := range cases {
