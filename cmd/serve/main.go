@@ -26,10 +26,14 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"glm52-nvidia/internal/captcha"
+	"glm52-nvidia/internal/hcaptcha"
+	"glm52-nvidia/internal/hcaptchapow"
 	"glm52-nvidia/internal/provider/nvidia"
 
 	"github.com/gin-gonic/gin"
@@ -48,9 +52,8 @@ func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	captchaFlag := flag.String("captcha", "", "one-shot hCaptcha token (consumed on first use)")
 	auto := flag.Bool("auto", false, "prewarm captcha tokens via the captcha pool")
-	captchaSolver := flag.String("captcha-solver", "pow", "captcha token source: pow (pure-Go hCaptcha PoW via embedded V8; default, no browser) or browser (headless Chromium fallback)")
 	poolSize := flag.Int("pool-size", 3, "ready captcha tokens to keep buffered (-auto)")
-	poolWorkers := flag.Int("pool-workers", 1, "concurrent captcha extractors / Chrome processes (-auto); each worker owns one Chrome")
+	poolWorkers := flag.Int("pool-workers", 1, "concurrent captcha solvers (-auto)")
 	maxInflight := flag.Int("max-inflight", 4, "max concurrent upstream streams (0=unlimited)")
 	inflightWait := flag.Duration("inflight-wait", 500*time.Millisecond, "how long to wait for an in-flight slot before returning 503 (0=reject immediately)")
 	coalesceMs := flag.Int("coalesce-ms", 16, "merge consecutive SSE content deltas within this window (0=off); first token always flushes immediately")
@@ -58,7 +61,7 @@ func main() {
 	poolTTL := flag.Duration("pool-ttl", 90*time.Second, "discard pooled captcha tokens older than this (-auto)")
 	captchaWait := flag.Duration("captcha-wait", 30*time.Second, "max wait for a pooled captcha token per request (0=block until ready); then 503")
 	modelRefresh := flag.Duration("model-refresh", 6*time.Hour, "re-scrape build.nvidia.com for the playground model catalog on this interval (0=fetch once at startup; <0=keep the compiled-in snapshot)")
-	chromeProxy := flag.String("chrome-proxy", "", "proxy for captcha Chrome and upstream API (e.g. socks5://host:port); falls back to CHROME_PROXY")
+	chromeProxy := flag.String("chrome-proxy", "", "proxy for upstream API (e.g. socks5://host:port); falls back to CHROME_PROXY")
 	flag.Parse()
 
 	if !*auto && *captchaFlag == "" {
@@ -76,7 +79,7 @@ func main() {
 			log.Fatalf("chrome-proxy: invalid URL %q", proxyURL)
 		}
 		proxyFunc = http.ProxyURL(u)
-		log.Printf("upstream + captcha proxy=%s", proxyURL)
+		log.Printf("upstream proxy=%s", proxyURL)
 	}
 
 	transport := &http.Transport{
@@ -99,8 +102,7 @@ func main() {
 	defer stop()
 
 	var (
-		browser *captcha.BrowserGroup
-		pool    *captcha.Pool
+		pool *captcha.Pool
 	)
 	if *auto {
 		poolCfg := captcha.PoolConfig{
@@ -108,31 +110,10 @@ func main() {
 			Workers: *poolWorkers,
 			TTL:     *poolTTL,
 		}
-		switch *captchaSolver {
-		case "pow":
-			pool = captcha.NewPool(ctx, captcha.PowExtract(), poolCfg)
-			log.Printf("captcha pool: solver=pow (pure Go, no browser) size=%d workers=%d ttl=%s captcha-wait=%s",
-				*poolSize, *poolWorkers, *poolTTL, *captchaWait)
-		case "browser":
-			var err error
-			browser, err = captcha.NewBrowserGroup(ctx, *poolWorkers, captcha.BrowserConfig{
-				Proxy: proxyURL,
-			})
-			if err != nil {
-				log.Fatalf("captcha browser: %v", err)
-			}
-			pool = captcha.NewPool(ctx, browser.Extract, poolCfg)
-			log.Printf("captcha pool: solver=browser (headless Chromium) size=%d workers=%d chromes=%d ttl=%s captcha-wait=%s",
-				*poolSize, *poolWorkers, browser.Len(), *poolTTL, *captchaWait)
-		default:
-			log.Fatalf(`-captcha-solver must be "pow" or "browser", got %q`, *captchaSolver)
-		}
-		defer func() {
-			pool.Close()
-			if browser != nil {
-				browser.Close()
-			}
-		}()
+		pool = captcha.NewPool(ctx, powExtractTimed(), poolCfg)
+		log.Printf("captcha pool: solver=pow (pure Go, no browser) size=%d workers=%d ttl=%s captcha-wait=%s",
+			*poolSize, *poolWorkers, *poolTTL, *captchaWait)
+		defer pool.Close()
 
 		if *warmTimeout > 0 {
 			log.Printf("warming captcha pool (timeout=%s)…", *warmTimeout)
@@ -243,6 +224,42 @@ func main() {
 
 func execCoalesce(ms int) time.Duration {
 	return time.Duration(ms) * time.Millisecond
+}
+
+// powExtractTimed wraps the pure-Go hCaptcha PoW extractor with a per-decode
+// speed log: each solved token logs its wall-clock elapsed time, the challenge
+// difficulty (JWT "s" claim, when parseable) and a rolling average with the
+// projected steady-state rate per worker. Extract failures are left to the
+// pool, which already logs them with backoff.
+func powExtractTimed() captcha.ExtractFunc {
+	var (
+		mu    sync.Mutex
+		count int
+		total time.Duration
+	)
+	return func(ctx context.Context) (string, error) {
+		start := time.Now()
+		token, info, err := hcaptcha.CaptchaTokenDetail(ctx, captcha.PlaygroundSitekey, captcha.PlaygroundHost)
+		if err != nil {
+			return "", err
+		}
+		elapsed := time.Since(start)
+
+		mu.Lock()
+		count++
+		total += elapsed
+		avg := total / time.Duration(count)
+		rate := int(3600 / avg.Seconds()) // tokens/h per worker
+		mu.Unlock()
+
+		difficulty := "-"
+		if pow, perr := hcaptchapow.ParsePow(info.JWT); perr == nil {
+			difficulty = strconv.FormatFloat(pow.Difficulty, 'f', -1, 64)
+		}
+		log.Printf("captcha pool: pow decoded in %s difficulty=%s (avg %s over %d solves, ~%d tokens/h/worker)",
+			elapsed.Round(time.Millisecond), difficulty, avg.Round(time.Millisecond), count, rate)
+		return token, nil
+	}
 }
 
 func waitPoolReady(ctx context.Context, pool *captcha.Pool, want int, timeout time.Duration) error {

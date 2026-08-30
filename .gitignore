@@ -8,3 +8,4 @@
 *.exe
 *.test
 *.out
+/serve

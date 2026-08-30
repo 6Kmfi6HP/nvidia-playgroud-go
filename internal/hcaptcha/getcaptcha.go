@@ -595,13 +595,22 @@ func isHex(s string) bool {
 // (truncated to 800 characters), so protocol drift against hCaptcha can be
 // diagnosed from the error alone.
 func CaptchaToken(ctx context.Context, sitekey, host string) (string, error) {
+	token, _, err := CaptchaTokenDetail(ctx, sitekey, host)
+	return token, err
+}
+
+// CaptchaTokenDetail is CaptchaToken plus the solved-challenge metadata, so
+// callers can surface decode timing and difficulty (parse SolveInfo.JWT with
+// hcaptchapow.ParsePow) in their own logs. The SolveInfo is the one produced
+// by the solve stage, even when no passcode came back.
+func CaptchaTokenDetail(ctx context.Context, sitekey, host string) (string, SolveInfo, error) {
 	solve, attempts, err := CaptchaAttempts(ctx, sitekey, host)
 	if err != nil {
-		return "", err // already prefixed with the failing stage
+		return "", solve, err // already prefixed with the failing stage
 	}
 	for _, a := range attempts {
 		if a.Token != "" {
-			return a.Token, nil
+			return a.Token, solve, nil
 		}
 	}
 	var sb strings.Builder
@@ -611,7 +620,7 @@ func CaptchaToken(ctx context.Context, sitekey, host string) (string, error) {
 		sb.WriteString("\n  - ")
 		sb.WriteString(a.Summary())
 	}
-	return "", fmt.Errorf("%s", sb.String())
+	return "", solve, fmt.Errorf("%s", sb.String())
 }
 
 // clipBytes renders b as a string, truncating at n bytes with a size note.

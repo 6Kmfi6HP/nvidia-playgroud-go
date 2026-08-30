@@ -5,8 +5,7 @@ package captcha
 // hsw solver (see internal/hcaptcha + internal/hcaptcha/hsw), then exchanges
 // the solution at getcaptcha for a one-shot P1_ token.
 //
-// This is the default gateway extractor — Chrome stays available behind
-// -captcha-solver=browser as a fallback debugging path.
+// This is the default and only gateway extractor.
 
 import (
 	"context"

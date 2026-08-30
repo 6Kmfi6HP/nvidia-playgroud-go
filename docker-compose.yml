@@ -7,8 +7,8 @@ services:
     image: glm52-nvidia-go:local
     ports:
       - "8080:8080"
-    shm_size: "2gb"
     restart: unless-stopped
     command: ["-auto", "-addr", ":8080"]
     environment:
+      # 上游 API 代理（无浏览器时同样生效）；默认空值走系统直连
       CHROME_PROXY: ${CHROME_PROXY:-}

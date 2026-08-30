@@ -14,16 +14,14 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 FROM debian:bookworm-slim
 
+# 不需要 Chromium：验证码由纯 Go 的 hCaptcha PoW 求解器解决，不依赖任何
+# 浏览器。仅保留 HTTPS 证书与探活工具。
+# - ca-certificates: 信任系统根证书，支持 https 上游请求
+# - wget: 供下方 HEALTHCHECK 探活使用
 RUN apt-get update && apt-get install -y --no-install-recommends \
 	ca-certificates \
-	chromium \
-	fonts-liberation \
-	fonts-noto-cjk \
 	wget \
 	&& rm -rf /var/lib/apt/lists/*
-
-ENV CHROME_PATH=/usr/bin/chromium \
-	CHROMEDP_NO_SANDBOX=1
 
 COPY --from=build /out/serve /usr/local/bin/serve
 
