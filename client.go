@@ -15,7 +15,7 @@ import (
 
 // --- Client ---
 
-// Client is the GLM-5.2 API client.
+// Client is the NVIDIA Build Playground predict client (multi-model).
 type Client struct {
 	captchaToken string // reverse-engineered captcha token
 
@@ -62,14 +62,16 @@ func WithDefaults(maxTokens int, seed int, temp, topP float64) Option {
 	}
 }
 
-// WithThinking enables or disables GLM Thinking mode (reasoning_content).
-// Matches NVIDIA Playground / NIM: chat_template_kwargs.enable_thinking.
-// Default when unset: enabled (true), clear_thinking=false.
+// WithThinking forces thinking mode (reasoning_content) on or off. Without
+// it, chat_template_kwargs.enable_thinking is injected only for models that
+// declare the Thinking capability (most of the current anonymous catalog
+// rejects thinking kwargs with 400).
 func WithThinking(enable bool) Option {
 	return func(c *Client) { c.thinking = &enable }
 }
 
-// New creates a new GLM-5.2 client configured with an hCaptcha token.
+// New creates a client configured with an hCaptcha token (default model
+// moonshotai/kimi-k3; override with WithModel).
 func New(opts ...Option) *Client {
 	c := &Client{
 		httpClient: &http.Client{Timeout: requestTimeout},

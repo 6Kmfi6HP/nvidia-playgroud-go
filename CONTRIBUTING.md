@@ -1,7 +1,8 @@
 # Contributing / 贡献指南
 
-Contributions are welcome. This project reverse-engineers the NVIDIA Playground API
-for GLM-5.2; keep that context in mind when opening issues or pull requests.
+Contributions are welcome. This project reverse-engineers the NVIDIA Build Playground API
+(build.nvidia.com anonymous multi-model predict + hCaptcha PoW); keep that
+context in mind when opening issues or pull requests.
 
 ## English
 

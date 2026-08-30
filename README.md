@@ -1,44 +1,50 @@
-# GLM-5.2 NVIDIA NIM Go Client
+# glm52-nvidia-go — NVIDIA Build Playground 多模型 Go 客户端 + 多格式网关
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![GLM-5.2](https://img.shields.io/badge/Model-GLM--5.2-753B-orange)](https://build.nvidia.com/z-ai/glm-5.2/playground)
-[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI_Compatible-412991?logo=openai&logoColor=white)](#方式-3openai-兼容本地代理)
-[![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker&logoColor=white)](#docker-部署方案-achromium--serve)
+[![Models](https://img.shields.io/badge/Models-11_build.nvidia.com-orange)](https://build.nvidia.com/models)
+[![Captcha](https://img.shields.io/badge/Captcha-Pure_Go_hCaptcha_PoW-753B?logo=hCaptcha&logoColor=white)](#方式-2纯-go-hcaptcha-pow-求解默认无浏览器)
+[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI_Compatible-412991?logo=openai&logoColor=white)](#方式-3多格式本地代理cliproxyapi)
+[![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker&logoColor=white)](#docker-部署)
 [![Status](https://img.shields.io/badge/Status-Reverse_Engineered-yellow)](#逆向分析报告)
 ![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
-> **English:** A reverse-engineered Go client and multi-format reverse proxy for **NVIDIA Playground's [GLM-5.2](https://build.nvidia.com/z-ai/glm-5.2/playground)** LLM (753B MoE, 1M context, thinking/tool-calling/streaming). It automates one-shot **hCaptcha** credentials with headless Chromium (chromedp), runs a prewarmed captcha token pool, embeds [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) to expose OpenAI Chat Completions, OpenAI Responses, and Claude Messages, and ships with Docker deployment and SSE/latency benchmarks. Inbound gateway API keys are **not** enabled.
+> **English:** A reverse-engineered Go client and multi-format reverse proxy for **NVIDIA Build Playground** (build.nvidia.com). It is **multi-model**: the registry seeds 11 anonymous playground models (DeepSeek, Kimi, MiniMax, Nemotron, …), refreshes the catalog at runtime by re-scraping the live SSR page, and routes every request to the matching predict endpoint with the per-model `nv-function-id`. hCaptcha credentials are minted by a **pure-Go PoW solver** (embedded V8, no browser), prewarmed into a token pool. The gateway embeds [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) to expose OpenAI Chat Completions, OpenAI Responses and Claude Messages, plus Docker deployments and SSE/latency benchmarks. Inbound gateway API keys are **not** enabled.
+>
+> 历史上的默认模型 `z-ai/glm-5.2` 已于 2026-08 被 NVIDIA 从匿名目录移除（后端 404），项目默认模型已切换为 `moonshotai/kimi-k3`；预测网关从 `api.ngc.nvidia.com` 迁移到 `buildapi.ngc.nvidia.com`。
 
-**中文:** 逆向工程 NVIDIA Playground 的 API 调用，实现 Go 语言本地调用 [GLM-5.2](https://build.nvidia.com/z-ai/glm-5.2/playground)（753B MoE、1M 上下文、思维链/工具调用/流式输出）。通过 headless Chromium（chromedp）自动化 hCaptcha 凭证，维护预热 token 池，嵌入 CLIProxyAPI 对外提供 OpenAI Chat Completions / Responses 与 Claude Messages，含 Docker 部署与 SSE/延迟基准。**不**启用网关入站 api-keys 校验。
+**中文:** 逆向工程 NVIDIA Build Playground（build.nvidia.com）的 API 调用，实现 Go 语言本地调用其**匿名 playground 模型**。支持多模型：内置注册表种子了 11 个可匿名调用的模型（DeepSeek、Kimi、MiniMax、Nemotron、DiffusionGemma 等），并可在运行时定期抓取 `https://build.nvidia.com/models` 目录页自动刷新，按 `model` 路由到对应的 predict 端点并注入各自的 `nv-function-id`。验证码使用**纯 Go hCaptcha PoW 求解器**（v8go 内嵌 V8 跑官方 hsw.js，不需要 Chromium），维护预热 token 池。网关嵌入 CLIProxyAPI，对外提供 OpenAI Chat Completions / Responses 与 Claude Messages，含 Docker 部署与 SSE/延迟基准。**不**启用网关入站 api-keys 校验。
 
 ### 快速开始
 
 ```bash
-# 一键启动多格式代理（内置 Chromium + captcha 预热池；依赖 CLIProxyAPI 内置翻译器）
+# 一键启动多格式代理（纯 Go PoW 验证码池，无浏览器；启动时自动抓取最新模型目录）
 go run ./cmd/serve -auto -addr :8080
 
-# OpenAI Chat Completions
+# OpenAI Chat Completions（默认模型 moonshotai/kimi-k3）
 curl http://localhost:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"z-ai/glm-5.2","messages":[{"role":"user","content":"Hi"}],"stream":true}'
+  -d '{"model":"moonshotai/kimi-k3","messages":[{"role":"user","content":"Hi"}],"stream":true}'
 
 # OpenAI Responses
 curl http://localhost:8080/v1/responses \
   -H 'Content-Type: application/json' \
-  -d '{"model":"z-ai/glm-5.2","input":"Hi","stream":true}'
+  -d '{"model":"moonshotai/kimi-k3","input":"Hi","stream":true}'
 
 # Claude Messages
 curl http://localhost:8080/v1/messages \
   -H 'Content-Type: application/json' \
   -H 'anthropic-version: 2023-06-01' \
-  -d '{"model":"z-ai/glm-5.2","max_tokens":256,"messages":[{"role":"user","content":"Hi"}],"stream":true}'
+  -d '{"model":"moonshotai/kimi-k3","max_tokens":256,"messages":[{"role":"user","content":"Hi"}],"stream":true}'
+
+# 当前可路由的模型列表（来自注册表/最新抓取结果）
+curl http://localhost:8080/v1/models
 ```
 
-或直接跑已发布镜像：
+或直接跑已发布镜像（镜像内**不含** Chromium）：
 
 ```bash
-docker run --rm -p 8080:8080 --shm-size=2g ghcr.io/6kmfi6hp/glm52-nvidia-go:latest
+docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/glm52-nvidia-go:latest
 ```
 
 ---
@@ -47,57 +53,70 @@ docker run --rm -p 8080:8080 --shm-size=2g ghcr.io/6kmfi6hp/glm52-nvidia-go:late
 
 ### 抓包过程
 
-1. 访问 https://build.nvidia.com/z-ai/glm-5.2/playground
-2. 启用 agent-browser 的 HAR 网络抓包
-3. 在 Playground 中发送消息
-4. 抓取实际发送给 API 的 HTTP 请求
+1. 访问 https://build.nvidia.com/models 选择任意带 playground 的模型
+2. 启用 agent-browser 的 HAR 网络抓包，在 Playground 中发送消息
+3. 抓取实际发送给 predict API 的 HTTP 请求
+4. 目录页与 playground 页的 SSR 内容用于提取模型三元组（slug / namespace / function id）
 
 ### 发现的 API 端点
 
 | 类型 | 端点 |
 |------|------|
-| **预测 API** (逆向) | `POST https://api.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/glm-5.2` |
-| **队列检查** | `GET https://api.ngc.nvidia.com/v2/predict/queues/models/qc69jvmznzxy/glm-5.2` |
-| **API 文档** | https://docs.api.nvidia.com/nim/reference/z-ai-glm-5-2 |
+| **预测 API** (逆向) | `POST https://buildapi.ngc.nvidia.com/v2/predict/models/{namespace}/{slug}` |
+| **模型目录** (SSR) | `GET https://build.nvidia.com/models`（Next flight data 内嵌 resourceId） |
+| **Playground 页** | `GET https://build.nvidia.com/{publisher}/{slug}/playground`（内嵌 `nvcfFunctionId`） |
+
+> **2026-08 上游变更：** 旧的预测网关 `api.ngc.nvidia.com`（及 `qc69jvmznzxy/glm-5.2`）对匿名账号已返回 404；目录页旧的 `?pageSize=200&filters=...` URL 返回空 body。现在统一走 `buildapi.ngc.nvidia.com`，目录解析迁移到 `/models` 页面。
 
 ### 多模型支持
 
-每个 build.nvidia.com Playground 模型都有独立的 `slug`（端点路径）与 `nv-function-id`，namespace `qc69jvmznzxy` 全模型共享。`internal/models` 持有一份已爬取的注册表（52 个 chat playground 模型，含 `z-ai/glm-5.2`、`deepseek-ai/deepseek-v4-pro`、`nvidia/nemotron-*`、`openai/gpt-oss-*`、`qwen/qwen3.5-*` 等，已用真实 captcha token 端到端验证）。
+每个 build.nvidia.com Playground 模型都有独立的 `slug`（端点路径）与 `nv-function-id`；namespace `qc69jvmznzxy` 当前全模型共享。`internal/models` 持有注册表：编译期快照（`registry.go`）作为 bootstrap/回退，运行时由 `fetch.go` 抓取目录页 + 逐个探测 playground 页，把内联了 UUID 形 `nvcfFunctionId` 的模型导入注册表（`All()`/`Replace()` 原子交换，刷新对 in-flight 请求无感，抓取失败保留旧表）。
 
-注册表由 `scripts/scrape_playground_models.py` 生成：拉取 `https://integrate.api.nvidia.com/v1/models` 的全量 id 列表，逐个抓 `/{id}/playground` 页面，解析 SSR 内联的 `nvcfFunctionId`+`namespace`。刷新：
+**当前内置快照：11 个可用模型**（2026-08-30 抓取，目录页共 24 个端点，其余 13 个如 qwen-image / riva-translate / vsr 等页面未内联 function id，被跳过）：
 
-```bash
-python3 scripts/scrape_playground_models.py > scripts/playground_models.json
-# 然后按 scripts/playground_models.json 更新 internal/models/registry.go 的 Models map
+```
+deepseek-ai/deepseek-v4-flash-0731    deepseek-ai/deepseek-v4-pro-0813
+google/diffusiongemma-26b-a4b-it      meta/muse-glimmer-30b
+minimaxai/minimax-m3                  moonshotai/kimi-k3          ← 默认模型
+nvidia/ising-calibration-1.5-31b      nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+nvidia/nemotron-3-ultra-550b-a55b     nvidia/nemotron-3.5-lightning-30b-a3b
+poolside/laguna-xs-2.1
 ```
 
-请求体里指定任意注册表内模型即可路由到对应端点（serve 与 Go client 都按 `model` 查表拼 URL + 注入对应 `nv-function-id`；未知模型返回 400）：
+- **默认模型** `moonshotai/kimi-k3`（`z-ai/glm-5.2` 2026-08 起被上游从匿名目录移除，后端 404，**不要**再请求它）。
+- 请求体指定任意注册表内模型即可路由到对应端点（serve 与 Go client 都按 `model` 查表拼 URL + 注入 `nv-function-id`；未知模型返回 400 `unknown model`）：
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"deepseek-ai/deepseek-v4-pro","messages":[{"role":"user","content":"Hi"}],"stream":true}'
+  -d '{"model":"deepseek-ai/deepseek-v4-pro-0813","messages":[{"role":"user","content":"Hi"}],"stream":true}'
 ```
 
-未纳入的模型（如 `ibm/granite-*-code-instruct`、`nv-mistralai/mistral-nemo-12b`、`moonshotai/kimi-k2.6`）其 `/playground` 页把 `nvcfFunctionId` 渲染为 `"None"`——function-id 只在真实页面运行时解析，静态抓取拿不到。**不要**给这些模型 pin 第三方来源的 function-id（实测会被上游以 `"Cannot parse function_id with value None"` 拒绝）；要让它们可用，需要在真实浏览器里驱动页面拿到运行时 function-id 后再加进注册表。
+- **运行时自动刷新**：serve 启动即拉一次目录，之后按 `-model-refresh` 间隔（默认 `6h`；`0` = 只启动时拉一次；`<0` = 关闭、只用编译期快照）热刷新注册表并重绑网关 `/v1/models`，失败只记日志、保留旧表。
+- 重新生成快照（手动）：
+
+```bash
+python3 scripts/scrape_playground_models.py > scripts/playground_models.json
+# 按输出更新 internal/models/registry.go 的 Models map（也可直接用 $MODEL_LIVE=1 go test ./internal/models -run TestLiveFetchSmoke -v 验证实时抓取）
+```
+
+- 未纳入的模型（function id 只在真实页面运行时解析、静态抓不到）**不要**给它们 pin 第三方来源的 function-id——实测会被上游以 `"Cannot parse function_id with value None"` 拒绝。
 
 ### 认证机制
 
 Playground **不**使用 API Key 认证，而是使用 **hCaptcha token** 机制：
 
-1. 页面加载时渲染 hCaptcha 不可见 widget
-2. 调用 `hcaptcha.execute(widgetId)` 生成 token
-3. token 存储在 widget 的 `data-hcaptcha-response` 属性中
-4. token 以 `P1_` 开头，包含 JWT 格式的加密载荷
-5. 每次请求携带 `nv-captcha-token` 和 `nv-function-id` 头
+1. 每个请求携带 `nv-captcha-token`（`P1_` 开头、JWT 格式载荷）和 `nv-function-id` 两个头
+2. token 由 hCaptcha 签发，针对（sitekey, host）对有效：sitekey `0c6a1e45-75d7-43cc-b836-a0c9d886b8ee`，host `build.nvidia.com`
+3. 本项目用**纯 Go PoW 求解**直接合成 token（见下），不再需要浏览器
 
 #### 请求签名
 
 ```
-POST https://api.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/glm-5.2
+POST https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/kimi-k3
 Content-Type: application/json
 Accept: text/event-stream
-nv-function-id: 3b9748d8-1d85-40e8-8573-0eeaa63a4b63
+nv-function-id: 1586112a-925c-48af-8631-7c815dbd749c
 nv-captcha-token: P1_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 Origin: https://build.nvidia.com
 Referer: https://build.nvidia.com/
@@ -107,38 +126,25 @@ Referer: https://build.nvidia.com/
 
 ### Token 生命周期
 
-- Token 由 hCaptcha 生成，单次有效
-- 每次调用 `hcaptcha.execute(widgetId)` 可生成新 token
-- Token 有效期约 2-3 分钟
-- 使用后立即失效
+- Token 由 hCaptcha PoW 生成，**单次有效**，有效期约 2-3 分钟（serve 池默认 **90s TTL** 即丢弃）
+- 每次求解（checksiteconfig → PoW → hsw → getcaptcha）约 1s，全部在 Go 内完成，无浏览器
 
 ### 请求体格式
 
-兼容 OpenAI Chat Completions 格式。Playground 开启 Thinking 时额外携带 `chat_template_kwargs`：
+上游即 OpenAI Chat Completions 格式。网关额外处理：
 
-```json
-{
-  "model": "z-ai/glm-5.2",
-  "messages": [
-    {"role": "user", "content": "Hello"}
-  ],
-  "temperature": 1.0,
-  "top_p": 1.0,
-  "max_tokens": 16384,
-  "seed": 42,
-  "stream": true,
-  "stream_options": {
-    "include_usage": true,
-    "continuous_usage_stats": true
-  },
-  "chat_template_kwargs": {
-    "enable_thinking": true,
-    "clear_thinking": false
-  }
-}
-```
+- `stream_options.continuous_usage_stats` 统一关闭（省流量），`include_usage` 默认开启
+- 思维链参数按**模型**归一化（`internal/provider/nvidia/reasoning.go`），不是所有模型都接受 `chat_template_kwargs.enable_thinking`——多数 2026-08 目录模型（如 kimi-k3）对 thinking kwargs 直接 400，网关对未知模型会**剥离**该类参数：
 
-`enable_thinking: true` 时上游在 SSE `delta` / 非流式 `message` 中返回 `reasoning_content`（思维链），再返回 `content`（最终回答）。`clear_thinking: false` 表示多轮对话保留历史思考内容。
+| 模型 | 思维链控制方式 |
+|------|----------------|
+| `deepseek-ai/deepseek-v4-*` | `chat_template_kwargs.reasoning_effort` ∈ {none, high, max}（默认 high） |
+| `nvidia/nemotron-3-ultra-550b-a55b` | `reasoning_effort` ∈ {none, medium, high}（默认 high） |
+| `google/diffusiongemma-26b-a4b-it` | `enable_thinking` 开关 |
+| `minimaxai/minimax-m3` | `thinking_mode` ∈ {enabled, disabled} |
+| 其他（kimi-k3 等） | 不接受 thinking kwargs，统一剥离 |
+
+开启推理链时，上游在 SSE `delta` / 非流式 `message` 中先返回 `reasoning_content`，再返回 `content`。
 
 ### 响应体格式
 
@@ -150,50 +156,39 @@ data: {"id":"chatcmpl-xxx","choices":[{"index":0,"delta":{"content":"你好","ro
 data: [DONE]
 ```
 
-开启 Thinking 时先出现 `reasoning_content`，再出现 `content`。
-
 ## Go 客户端使用
 
 ### 安装
 
-```bash
-go get github.com/chromedp/chromedp  # 仅自动提取 token 时需要
+本仓库 Go module 名为 `glm52-nvidia`（非标准域名路径），源码库内直接导入即可：
+
+```go
+import glm52 "glm52-nvidia"   // 客户端
+import "glm52-nvidia/internal/captcha"   // PoW 提取 / token 池
 ```
 
 ### 方式 1：Captcha Token 模式（逆向）
 
-从浏览器获取 token：
+从浏览器控制台或 `cmd/captchapow` 获取一次性 token（Playground 页面 `document.querySelector('[data-hcaptcha-widget-id]').dataset.hcaptchaResponse`），然后：
 
 ```bash
-# 1. 打开浏览器访问 Playground
-# 2. 打开开发者控制台，执行：
-#    hcaptcha.execute("xxx")
-# 3. 获取 token：
-#    document.querySelector('[data-hcaptcha-widget-id]')
-#      .dataset.hcaptchaResponse
-
-# 4. 使用 Go 客户端
 go run ./cmd/example -captcha "P1_eyJ..."
 ```
 
 或在代码中：
 
 ```go
-client := glm52.New(glm52.WithCaptchaToken("P1_eyJ..."))
+client := glm52.New(glm52.WithCaptchaToken("P1_eyJ..."))   // 默认模型 moonshotai/kimi-k3
 resp, err := client.Chat(ctx, messages)
+
+// 指定其他注册表模型：
+client = glm52.New(glm52.WithCaptchaToken("P1_eyJ..."), glm52.WithModel("deepseek-ai/deepseek-v4-pro-0813"))
+// 客户端默认只在模型声明支持 Thinking 时注入 chat_template_kwargs
 ```
 
-### 方式 2：自动提取 Token（chromedp）
+### 方式 2：纯 Go hCaptcha PoW 求解（默认，无浏览器）
 
-```go
-// cmd/example/auto.go 中提供了完整实现
-token, err := ExtractCaptchaToken(ctx)
-client := glm52.New(glm52.WithCaptchaToken(token))
-```
-
-### 方式 3：纯 Go hCaptcha PoW 求解（内嵌 V8，无浏览器，实验）
-
-实验性的浏览器无关路径：v8go 内嵌 V8 运行官方 hsw.js 完成 PoW，产出 `P1_...` token（详见 `runs/hcaptcha-pow-go.md`）。
+v8go 内嵌 V8 运行官方 hsw.js 完成 PoW，产出 `P1_...` token（详见 `runs/hcaptcha-pow-go.md`）。这是 **serve 网关的默认（也是唯一）验证码方案**，Docker 镜像不包含 Chromium。
 
 ```bash
 # 一键求解（默认 build.nvidia.com / NVIDIA sitekey）
@@ -206,64 +201,59 @@ go run ./cmd/captchapow -v
 go run ./cmd/captchapow -sitekey <sitekey> -host <host>
 ```
 
-各阶段（checksiteconfig → 指纹+挖矿 → hsw 求 n → 加密提交 getcaptcha → P1 token）全链路约 1s。
-新增包：`internal/hcaptchapow`（纯 Go 算法）、`internal/hsw`（v8go 运行器）、`internal/hcaptcha`（编排）。
-已知边界：当前入侵参数未含 motionData；上游 predict 还需刷新 `scripts/playground_models.json` 的 function-id 绑定。
+在代码中使用：
 
-## 模型信息
+```go
+import "glm52-nvidia/internal/captcha"
+token, err := captcha.PowExtract()(ctx) // = hcaptcha.CaptchaToken(ctx, captcha.PlaygroundSitekey, captcha.PlaygroundHost)
+```
 
-| 属性 | 值 |
-|------|-----|
-| 架构 | MoE, DSA + IndexShare 稀疏注意力 |
-| 参数 | 753B |
-| 上下文 | 1M tokens |
-| 支持 | 推理链 (thinking)、工具调用、流式输出 |
-| API 兼容 | OpenAI Chat Completions 格式 |
-| 部署 | Docker NIM: `nvcr.io/nim/zai-org/glm-5.2:latest` |
+各阶段（checksiteconfig → 指纹+挖矿 → hsw 求 n → 加密提交 getcaptcha → P1 token）全链路约 1s。实现分布在 `internal/hcaptchapow`（纯 Go 算法）、`internal/hsw`（v8go 运行器）、`internal/hcaptcha`（编排）。已知边界：当前入侵参数未含 motionData；个别站点可能要求动态校验脚本，此时需回退浏览器方案。
+
+> 历史遗留：`internal/captcha` 仍保留 chromedp 浏览器提取（`Extract`/`BrowserGroup`），仅用于旧实验 CLI（`cmd/example -auto`、`cmd/hangbench`、`cmd/cacheprobe`、`cmd/captchaopt`），需要本地 Chrome。网关与 Docker 镜像已不使用它。
 
 ### 方式 3：多格式本地代理（CLIProxyAPI）
 
-上游 predict API 本身就是 Chat Completions 格式。`serve` 嵌入 CLIProxyAPI 网关：内置翻译器把 Claude `/v1/messages` 与 OpenAI `/v1/responses` 转成 openai chat，再由 nvidia ProviderExecutor 注入 captcha / `nv-function-id` 并调用 predict。**不**配置网关 `api-keys`（入站无 Key 校验）。**每个 captcha token 只能用于一次上游请求。**
+`serve` 嵌入 CLIProxyAPI 网关：内置翻译器把 Claude `/v1/messages` 与 OpenAI `/v1/responses` 转成 openai chat，再由 nvidia ProviderExecutor 注入 captcha / `nv-function-id` 并调用 predict。**不**配置网关 `api-keys`（入站无 Key 校验）。**每个 captcha token 只能用于一次上游请求。**
 
 ```bash
-# 共享 Chrome + captcha 预热池（启动默认：pool=3 workers=1 coalesce=16ms，先预热再接流量）
+# 纯 Go PoW 预热池（启动默认：pool=3 workers=1 coalesce=16ms，先预热再接流量；warm-timeout=3m）
 go run ./cmd/serve -auto -addr :8080
 
-# captcha Chrome + 上游 API 走同一 SOCKS5（也可设环境变量 CHROME_PROXY）
+# 上游 API + 模型目录抓取走代理（也可设环境变量 CHROME_PROXY；无浏览器参与）
 go run ./cmd/serve -auto -chrome-proxy socks5://100.74.21.88:7890
 
 # 覆盖默认（实验脚本 scripts/ttft_sweep.sh）
 go run ./cmd/serve -auto -pool-size=2 -pool-workers=2 -coalesce-ms=0 -max-inflight=8
 
-# 跳过启动预热（不推荐：首请求 TTFT 会含整段 captcha 提取）
+# 跳过启动预热（不推荐：首请求 TTFT 会含整段 PoW 求解）
 go run ./cmd/serve -auto -warm-timeout=0
 
-# OpenAI Chat Completions（serve 默认注入 enable_thinking，与 Playground 一致）
+# OpenAI Chat Completions
 curl http://localhost:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"z-ai/glm-5.2","messages":[{"role":"user","content":"Which is larger, 9.11 or 9.8?"}],"stream":true}'
+  -d '{"model":"moonshotai/kimi-k3","messages":[{"role":"user","content":"Which is larger, 9.11 or 9.8?"}],"stream":true}'
 
 # OpenAI Responses
 curl http://localhost:8080/v1/responses \
   -H 'Content-Type: application/json' \
-  -d '{"model":"z-ai/glm-5.2","input":"Hi","stream":true}'
+  -d '{"model":"moonshotai/kimi-k3","input":"Hi","stream":true}'
 
 # Claude Messages
 curl http://localhost:8080/v1/messages \
   -H 'Content-Type: application/json' \
   -H 'anthropic-version: 2023-06-01' \
-  -d '{"model":"z-ai/glm-5.2","max_tokens":256,"messages":[{"role":"user","content":"Hi"}],"stream":true}'
+  -d '{"model":"moonshotai/kimi-k3","max_tokens":256,"messages":[{"role":"user","content":"Hi"}],"stream":true}'
 
-# 显式关闭思维链（Chat Completions）
-curl http://localhost:8080/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"z-ai/glm-5.2","messages":[{"role":"user","content":"Hi"}],"stream":true,"chat_template_kwargs":{"enable_thinking":false}}'
-
-# 池水位（fills/takes/ready）
+# 池水位（ready/fills/takes/errors/expired）；模型列表见 /v1/models
 curl -s http://localhost:8080/healthz
 ```
 
-也可在请求头携带 `nv-captcha-token` 提供一次性 token。流式优化：关闭 `continuous_usage_stats`、可选 content coalesce；`-auto` 时后台预热 token，请求路径只从池中取。池内 token 默认 **90s TTL**，过期丢弃；上游返回 `Token is invalid` 时自动换新 token 最多重试 2 次。端到端调用仍需 `-auto` / `-captcha` / 请求头 captcha（与现网一致）。
+- 验证码来源优先级：请求头 `nv-captcha-token` > `-captcha` 一次性 flag（首请求消费后失效）> `-auto` 池（默认 PoW 求解，池空时最多等 `-captcha-wait` 默认 30s 后返回 503）。
+- 上游返回 captcha 形状的 4xx（`Token is invalid` / `hcaptcha` 字样）时自动换新 token 重试，最多 3 次尝试（2 次换新）；池内 token 默认 90s TTL 过期丢弃。
+- 流式优化：关闭 `continuous_usage_stats`、可选 content coalesce（`-coalesce-ms`）；`-max-inflight` 限制并发上游流（默认 4，超限等待 `-inflight-wait` 500ms 后 503）。
+- 模型目录热刷新：`-model-refresh`（默认 6h；`0` 只启动拉一次；`<0` 关闭）。
+- 所有 flag 见 `go run ./cmd/serve -h`。
 
 流式时序 / 并发实验：
 
@@ -273,29 +263,28 @@ go run ./cmd/streambench -proxy http://localhost:8080
 go run ./cmd/streambench -proxy http://localhost:8080 -concurrency 4 -max-tokens 64
 ```
 
-## Docker 部署（方案 A：Chromium + serve）
+## Docker 部署
 
-镜像内置 Chromium，默认以 `-auto` 启动 captcha 预热池。
+镜像内置纯 Go PoW 求解器，默认以 `-auto` 启动预热池；**不需要 Chromium，也不需要额外 shm**。
 
 ```bash
-# 本地构建并运行（需要 2GB shm，供 headless Chrome 使用）
+# 本地构建并运行
 docker compose up --build
 
-# 或直接跑已发布镜像（GHCR，需先发版）
-docker run --rm -p 8080:8080 --shm-size=2g \
-  ghcr.io/6kmfi6hp/glm52-nvidia-go:latest
+# 或直接跑已发布镜像（GHCR）
+docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/glm52-nvidia-go:latest
 ```
 
-健康检查：`GET /healthz`。反向代理流式接口时请关闭 buffering，并拉长 read timeout（建议 ≥120s；空 captcha 池时 serve 最多等 `-captcha-wait`，默认 30s 后返回 503，过短的代理超时会表现为客户端 504）。
+健康检查：`GET /healthz`（容器 HEALTHCHECK 亦探活该路径）。反向代理流式接口时请关闭 buffering，并拉长 read timeout（建议 ≥120s；空 captcha 池时 serve 最多等 `-captcha-wait`，默认 30s 后返回 503，过短的代理超时会表现为客户端 504）。
 
 环境变量：
 
 | 变量 | 作用 |
 |------|------|
-| `CHROME_PATH` | Chromium 可执行文件路径（镜像内默认 `/usr/bin/chromium`） |
-| `CHROMEDP_NO_SANDBOX` | 设为 `1` 时启用 `--no-sandbox` / `--disable-dev-shm-usage`（镜像默认开启） |
-| `CHROME_PROXY` | captcha Chrome 与上游 API 共用代理，如 `socks5://host:port`（等同 `-chrome-proxy`） |
-| `CHROME_PROXY_REMOTE_DNS` | 设为 `1` 时强制 DNS 也走 SOCKS（部分代理不支持，默认关闭） |
+| `CHROME_PROXY` | 上游 API 与模型目录抓取共用代理（等同 `-chrome-proxy`），如 `socks5://host:port` |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 标准 Go 代理环境变量，同样作用于全部出站请求 |
+
+> 旧版文档中的 `CHROME_PATH` / `CHROMEDP_NO_SANDBOX` / `--shm-size=2g` 仅对已移除的 Chromium 方案有意义，镜像中已无浏览器，无需再设置。
 
 ## 发版与镜像
 
@@ -315,19 +304,38 @@ git push origin v0.1.0
 
 ```
 glm52-nvidia-go/
-├── types.go              # 类型定义（ChatRequest、Message、Chunk 等）
-├── client.go             # 客户端实现（hCaptcha token + SSE 流式，按 model 路由）
-├── internal/captcha/     # 共享 Chrome、token 预热池、一次性提取
+├── types.go              # 类型定义（ChatRequest、Message、Chunk 等，OpenAI-compatible）
+├── client.go             # 客户端实现（hCaptcha token + SSE 流式，按 model 查表路由）
+├── internal/captcha/     # token 预热池、纯 Go PoW 提取（pow.go）+ 遗留 chromedp 提取
 ├── internal/hcaptchapow/ # 纯 Go hCaptcha PoW 算法（JWT/stamp/CRC32/XXH64，零依赖）
 ├── internal/hsw/         # v8go 内嵌 V8：运行官方 hsw.js 求 n / 加解密
 ├── internal/hcaptcha/    # 无浏览器编排：指纹→n→getcaptcha→P1 token
+├── internal/models/      # Playground 模型注册表：registry.go（快照）+ fetch.go（实时抓取）
 ├── cmd/captchapow/       # 纯 Go PoW 求解 CLI（无浏览器）
-├── internal/models/      # Playground 模型注册表（slug/namespace/function-id）
-├── internal/provider/nvidia/  # CLIProxyAPI ProviderExecutor（captcha + predict）
-├── cmd/example/          # 命令行示例（-smooth-ms 打字机输出）
-├── cmd/serve/            # 多格式网关（CLIProxyAPI：chat/completions + responses + messages）
+├── cmd/example/          # 命令行示例（-captcha / -auto / -smooth-ms 打字机输出）
+├── cmd/serve/            # 多格式网关（chat/completions + responses + messages；模型热刷新）
 ├── cmd/streambench/      # SSE 时序 + 并发实验（-concurrency）
-├── scripts/scrape_playground_models.py  # 爬取 playground 模型 + function-id
-├── Dockerfile            # Chromium + serve 多阶段构建
-└── docker-compose.yml    # 本地一键启动（shm_size=2g）
+├── cmd/hangbench/        # 空闲/突发 token 池行为实验
+├── cmd/cacheprobe/       # 流式时序探针
+├── cmd/captchaopt/       # 浏览器 captcha 提取调优实验（需本地 Chrome）
+├── scripts/scrape_playground_models.py  # 爬取 playground 模型 + function-id（离线快照用）
+├── scripts/playground_models.json       # 最近一次抓取结果（11/24）
+├── runs/                 # 历史实验记录（CAPTCHA PoW、TTFT、hangbench 等）
+├── Dockerfile            # 纯 Go PoW + serve 多阶段构建（无 Chromium）
+└── docker-compose.yml    # 本地一键启动
 ```
+
+## 测试
+
+```bash
+go build ./... && go vet ./... && go test ./...
+# 实时抓取冒烟（可选，需要外网）：
+MODEL_LIVE=1 go test ./internal/models -run TestLiveFetchSmoke -v
+```
+
+## 历史实验记录（runs/）
+
+- `runs/hcaptcha-pow-go.md` — 纯 Go hCaptcha PoW 求解实现记录
+- `runs/ttft-experiment-2026-07-21.md`、`runs/captcha-opt-2026-07-21.md` — 2026-07 浏览器 captcha/token 池实验（历史方案）
+- `runs/hangbench-2026-07-22.md`、`runs/captcha-sticky-2026-07-22.md` — 池水位与粘性实验（历史方案）
+- `runs/crawlex-pipeline.md` — Playground 抓包分析（历史）
