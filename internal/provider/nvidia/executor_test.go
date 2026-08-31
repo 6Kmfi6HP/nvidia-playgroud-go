@@ -350,6 +350,73 @@ func TestExecutePoolLease_InflightRejectedReturnsToken(t *testing.T) {
 	requireReturnedPoolToken(t, pool, extracts)
 }
 
+func TestExecutePoolLease_WaitsForInflightBeforeTakingToken(t *testing.T) {
+	pool, extracts := newExecutorLeasePool(t, "tok-1")
+	executor := NewExecutor(Options{
+		Pool:         pool,
+		MaxInflight:  1,
+		InflightWait: time.Minute,
+	})
+	releaseInflight, err := executor.acquireInflight(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan struct{})
+	var waits atomic.Int32
+	executor.beforeInflightWait = func() {
+		if waits.Add(1) == 1 {
+			close(waiting)
+		}
+	}
+	req, opts := leaseTestRequest()
+	errCh := make(chan error, 1)
+
+	go func() {
+		_, executeErr := executor.Execute(t.Context(), nil, req, opts)
+		errCh <- executeErr
+	}()
+
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("request did not wait for an in-flight slot")
+	}
+	if got := pool.Ready(); got != 1 {
+		t.Fatalf("ready pool tokens while waiting=%d want 1", got)
+	}
+	if got := extracts.Load(); got != 1 {
+		t.Fatalf("token extracts while waiting=%d want 1", got)
+	}
+
+	cancelCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	cancelErrCh := make(chan error, 1)
+	go func() {
+		_, executeErr := executor.Execute(cancelCtx, nil, req, opts)
+		cancelErrCh <- executeErr
+	}()
+	cancel()
+	err = receiveTestValue(t, cancelErrCh, "cancel waiting request result")
+
+	var authErr *coreauth.Error
+	if !errors.As(err, &authErr) {
+		t.Fatalf("error type=%T want *coreauth.Error", err)
+	}
+	if authErr.HTTPStatus != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want %d", authErr.HTTPStatus, http.StatusServiceUnavailable)
+	}
+	if got := extracts.Load(); got != 1 {
+		t.Fatalf("extract calls=%d want 1", got)
+	}
+
+	releaseInflight()
+	select {
+	case err := <-errCh:
+		t.Fatalf("first request returned before captcha resolution: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestExecutePoolLease_InflightCanceledReturnsToken(t *testing.T) {
 	pool, extracts := newExecutorLeasePool(t, "tok-1")
 	var transportHits atomic.Int32
@@ -443,14 +510,14 @@ func TestExecutePoolLease_ContextCanceledBeforeDoReturnsToken(t *testing.T) {
 	requireReturnedPoolToken(t, pool, extracts)
 }
 
-func TestExecutePoolLease_ExpiredWhileWaitingInflightSendsOnlyFreshToken(t *testing.T) {
+func TestExecutePoolLease_ExpiredAfterInflightWaitSendsFreshToken(t *testing.T) {
 	const ttl = 100 * time.Millisecond
 	pool, extracts := newExecutorLeasePoolWithTTL(t, ttl, "tok-1", "tok-2")
 	sentTokens := make(chan string, 2)
 	executor := NewExecutor(Options{
 		Pool:         pool,
 		MaxInflight:  1,
-		InflightWait: 5 * time.Second,
+		InflightWait: time.Minute,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			sentTokens <- req.Header.Get("nv-captcha-token")
 			return &http.Response{
@@ -483,8 +550,22 @@ func TestExecutePoolLease_ExpiredWhileWaitingInflightSendsOnlyFreshToken(t *test
 		errCh <- executeErr
 	}()
 
-	receiveTestValue(t, waiting, "first token inflight wait barrier")
-	receiveTestValue(t, time.After(5*ttl), "first lease TTL expiry")
+	receiveTestValue(t, waiting, "inflight wait barrier")
+	releaseInflight()
+	// Simulate another caller taking and expiring the first token while this
+	// request is still between the in-flight gate and captcha resolution.
+	lease, err := pool.TakeLease(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiveTestValue(t, time.After(5*ttl), "lease TTL expiry")
+	if lease.Commit() {
+		t.Fatal("expired lease unexpectedly committed")
+	}
+	releaseInflight, err = executor.acquireInflight(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	releaseInflight()
 	close(resume)
 	if executeErr := receiveTestValue(t, errCh, "fresh token execution result"); executeErr != nil {

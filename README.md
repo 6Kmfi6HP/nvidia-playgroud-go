@@ -276,7 +276,7 @@ curl -s http://localhost:8080/healthz
 - 验证码来源优先级：请求头 `nv-captcha-token` > `-captcha` 一次性 flag（首请求消费后失效）> `-auto` 池（默认 PoW 求解，池空时最多等 `-captcha-wait` 默认 30s 后返回 503）。
 - 指定 NVCF 实例：请求体 `model` 写成 `<function-id>@<model>`（如 `1586112a-925c-48af-8631-7c815dbd749c@moonshotai/kimi-k3`），或直接给 `nv-function-id: <function-id>` 请求头；body 的 pin 优先级高于 header。模型不在注册表/目录里也可以（NVIDIA 有些 function 不出现在 playground 页面但后端可调）：`{"model":"<function-id>@<slug>"}` 经由内部默认模型路由、由 header 携带真实目标，或保持 body 为任意已注册模型、只发 `nv-function-id` + `nv-function-slug`（可选 `nv-function-namespace` 覆盖默认 `qc69jvmznzxy`）两个头。
 - 上游返回 captcha 形状的 4xx（`Token is invalid` / `hcaptcha` 字样）时自动换新 token 重试，最多 3 次尝试（2 次换新）；池内 token 默认 90s TTL 过期丢弃。
-- 流式优化：关闭 `continuous_usage_stats`、可选 content coalesce（`-coalesce-ms`）；`-max-inflight` 限制并发上游流（默认 4，超限等待 `-inflight-wait` 500ms 后 503）。
+- 流式优化：关闭 `continuous_usage_stats`、可选 content coalesce（`-coalesce-ms`）；`-max-inflight` 限制并发上游流（默认 8，超限排队等待 `-inflight-wait` 30s 后 503）。
 - 模型目录热刷新：`-model-refresh`（默认 6h；`0` 只启动拉一次；`<0` 关闭）。目录抓取使用 **tls-client 模拟 Chrome 131 的 TLS/HTTP2 指纹**（JA3/JA4 + HTTP/2 SETTINGS），并经代理走固定出口；优先 filtered 列表 URL（40 个候选），被 AWS WAF 挑战时由 **internal/waftoken** 自动求解（挑战页 → challenge.js → V8 解混淆提取 AES 密钥 → 浏览器信号 AES-256-GCM 加密 → 解 PoW（NetworkBandwidth/scrypt/SHA-2）→ POST 换 `aws-waf-token`，纯 Go 无浏览器无 Node），仍失败才回退 unfiltered 页面（24 候选）。Akamai `ak_bmsc`/`bm_mi` 等会话 cookie 由内置 jar 自动吸收并重放。抓取成功后注册表自动持久化到 `-model-cache` JSON（默认 `models_cache.json`，已加入 .gitignore），启动时优先加载，失败/离线也能立即出模型。
 - 所有 flag 见 `go run ./cmd/serve -h`。
 

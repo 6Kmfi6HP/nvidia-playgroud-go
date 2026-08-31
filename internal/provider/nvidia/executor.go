@@ -376,17 +376,8 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 	var upResp *http.Response
 	staleLeases := 0
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		token, lease, err := e.resolveCaptcha(ctx, clientToken, attempt == 1)
-		if err != nil {
-			cleanup()
-			return nil, nil, captchaErr(err)
-		}
-
 		rel, err := e.acquireInflight(ctx)
 		if err != nil {
-			if lease != nil {
-				lease.Release()
-			}
 			cleanup()
 			return nil, nil, &coreauth.Error{
 				Code:       "request_scoped",
@@ -395,6 +386,12 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 			}
 		}
 		release = rel
+
+		token, lease, err := e.resolveCaptcha(ctx, clientToken, attempt == 1)
+		if err != nil {
+			cleanup()
+			return nil, nil, captchaErr(err)
+		}
 
 		upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
@@ -425,6 +422,9 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 			cleanup()
 			staleLeases++
 			if staleLeases >= maxAttempts {
+				if lease != nil {
+					lease.Release()
+				}
 				return nil, nil, &coreauth.Error{
 					Code:       "request_scoped",
 					Message:    "captcha token invalid or expired; retry the request",
