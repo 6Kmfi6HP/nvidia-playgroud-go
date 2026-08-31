@@ -93,7 +93,7 @@ func FetchChallenge(ctx context.Context, sitekey, host string) (jwt, location st
 	if err != nil {
 		return "", "", fmt.Errorf("checksiteconfig: %w", err)
 	}
-	defer closeBody(resp.Body)
+	defer CloseBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("checksiteconfig: HTTP %d", resp.StatusCode)
 	}
@@ -181,7 +181,7 @@ func Download(ctx context.Context, location string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("hsw download %s: %w", assetURL, err)
 	}
-	defer closeBody(resp.Body)
+	defer CloseBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("hsw download %s: HTTP %d", assetURL, resp.StatusCode)
 	}
@@ -303,9 +303,9 @@ func syncWasmInstantiateBare(src string) (out string, count int) {
 	return strings.ReplaceAll(src, m[0], repl), 1
 }
 
-// closeBody closes c after the body has been consumed or is being discarded;
+// CloseBody closes c after the body has been consumed or is being discarded;
 // a close failure has no effect on the data already read.
-func closeBody(c io.Closer) {
+func CloseBody(c io.Closer) {
 	if err := c.Close(); err != nil {
 		_ = err
 	}

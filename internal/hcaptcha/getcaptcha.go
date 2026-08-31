@@ -250,7 +250,7 @@ func postGetCaptchaBody(ctx context.Context, sitekey string, body io.Reader, con
 	if err != nil {
 		return 0, nil, fmt.Errorf("hcaptcha: getcaptcha (%s): %w", label, err)
 	}
-	defer closeBody(resp.Body)
+	defer hsw.CloseBody(resp.Body)
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, getCaptchaBodyLimit))
 	if err != nil {
 		return resp.StatusCode, nil, fmt.Errorf("hcaptcha: getcaptcha (%s): read body: %w", label, err)
@@ -278,7 +278,7 @@ func fetchChecksiteLive(ctx context.Context, sitekey, host string) (jwt, locatio
 	if err != nil {
 		return "", "", "", fmt.Errorf("checksiteconfig: %w", err)
 	}
-	defer closeBody(resp.Body)
+	defer hsw.CloseBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", "", "", fmt.Errorf("checksiteconfig: HTTP %d", resp.StatusCode)
 	}
@@ -637,12 +637,4 @@ func clipBytes(b []byte) string {
 		return string(b)
 	}
 	return fmt.Sprintf("%s…(+%d bytes)", string(b[:n]), len(b)-n)
-}
-
-// closeBody closes c after the body has been read or is being discarded; a
-// close failure has no effect on the data already consumed.
-func closeBody(c io.Closer) {
-	if err := c.Close(); err != nil {
-		_ = err
-	}
 }
