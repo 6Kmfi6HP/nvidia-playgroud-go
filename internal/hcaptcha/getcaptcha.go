@@ -259,32 +259,34 @@ func postGetCaptchaBody(ctx context.Context, sitekey string, body io.Reader, con
 }
 
 // fetchChecksite fetches checksiteconfig and returns the challenge jwt, the
-// hsw bundle location and the challenge key. Overridable in tests.
+// hsw bundle location, the challenge key and whether the site declares
+// features.enc_get_req (encrypted-only getcaptcha). Overridable in tests.
 var fetchChecksite = fetchChecksiteLive
 
 // fetchChecksiteLive mirrors hsw.FetchChallenge but also surfaces the
 // checksiteconfig c.key: modern getcaptcha endpoints expect that key in the
 // "c" parameter (legacy responses put the JWT itself in key, detected by the
-// "." of a JWT payload).
-func fetchChecksiteLive(ctx context.Context, sitekey, host string) (jwt, location, key string, err error) {
+// "." of a JWT payload). It also reports features.enc_get_req so the caller
+// can route straight to the encrypted submission when the site demands it.
+func fetchChecksiteLive(ctx context.Context, sitekey, host string) (jwt, location, key string, encGetReq bool, err error) {
 	u := fmt.Sprintf("%s?host=%s&sitekey=%s&sc=1&swa=0&spst=0&hl=en",
 		hsw.ChecksiteBase, url.QueryEscape(host), url.QueryEscape(sitekey))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
 	if err != nil {
-		return "", "", "", fmt.Errorf("checksiteconfig: %w", err)
+		return "", "", "", false, fmt.Errorf("checksiteconfig: %w", err)
 	}
 	req.Header.Set("User-Agent", getCaptchaUA)
 	resp, err := gcClient.Do(req)
 	if err != nil {
-		return "", "", "", fmt.Errorf("checksiteconfig: %w", err)
+		return "", "", "", false, fmt.Errorf("checksiteconfig: %w", err)
 	}
 	defer hsw.CloseBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", "", "", fmt.Errorf("checksiteconfig: HTTP %d", resp.StatusCode)
+		return "", "", "", false, fmt.Errorf("checksiteconfig: HTTP %d", resp.StatusCode)
 	}
 	var out hsw.ChecksiteResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, getCaptchaBodyLimit)).Decode(&out); err != nil {
-		return "", "", "", fmt.Errorf("checksiteconfig decode: %w", err)
+		return "", "", "", false, fmt.Errorf("checksiteconfig decode: %w", err)
 	}
 	jwt = out.C.Req
 	if jwt == "" {
@@ -295,16 +297,16 @@ func fetchChecksiteLive(ctx context.Context, sitekey, host string) (jwt, locatio
 		jwt, key = key, "" // legacy body where c.key carried the jwt itself
 	}
 	if jwt == "" {
-		return "", "", "", fmt.Errorf("checksiteconfig: no challenge jwt in response")
+		return "", "", "", false, fmt.Errorf("checksiteconfig: no challenge jwt in response")
 	}
 	location = out.L
 	if location == "" {
 		location, err = hsw.LocationFromJWT(jwt)
 		if err != nil {
-			return "", "", "", fmt.Errorf("checksiteconfig: %w", err)
+			return "", "", "", false, fmt.Errorf("checksiteconfig: %w", err)
 		}
 	}
-	return jwt, location, key, nil
+	return jwt, location, key, out.Features.EncGetReq, nil
 }
 
 // postGetCaptcha is the per-attempt POST indirection (overridable in tests).
@@ -314,19 +316,69 @@ var postGetCaptcha = PostGetCaptcha
 // (overridable in tests).
 var postGetCaptchaOctetFn = postGetCaptchaOctet
 
-// CaptchaAttempts solves the hCaptcha challenge for sitekey/host
-// (checksiteconfig -> fingerprint -> hsw solve, one challenge, one n) and
-// submits n to getcaptcha under several parameter variants, returning the raw
-// per-variant results. Variants are tried in order; the loop stops at the
-// first variant whose response carries a P1_ passcode. Errors are prefixed
-// with the failing stage.
+// claimResult carries one phase-A getcaptcha challenge claim (no n).
+type claimResult struct {
+	status int
+	body   []byte
+	err    error
+}
+
+// CaptchaAttempts solves the hCaptcha challenge for sitekey/host and submits
+// it to getcaptcha, returning the raw per-attempt results.
+//
+// Both routes share a speculative phase-A claim fired at t=0, concurrent with
+// checksiteconfig: the claim POST only carries static params (v, sitekey,
+// host, hl), so it is safe to start before the site's feature set is known
+// and has no side effects when discarded.
+//
+//   - features.enc_get_req (encrypted-only site): skip the checksiteconfig
+//     challenge solve and the plaintext variants entirely and submit the
+//     speculatively claimed challenge over the wasm-encrypted wire.
+//   - otherwise: solve the checksiteconfig challenge and try the plaintext
+//     parameter variants in order, stopping at the first P1_ passcode, then
+//     fall back to a freshly claimed encrypted submission. The speculative
+//     claim is discarded on this route: by the time the variant loop
+//     finishes, its challenge timeout (~1s) has usually expired.
+//
+// Errors are prefixed with the failing stage.
 func CaptchaAttempts(ctx context.Context, sitekey, host string) (solve SolveInfo, attempts []CaptchaAttempt, err error) {
 	start := time.Now()
 
-	jwt, location, key, err := fetchChecksite(ctx, sitekey, host)
+	// Speculative phase-A claim, concurrent with checksiteconfig.
+	claimCh := make(chan claimResult, 1)
+	go func() {
+		status, body, cerr := postGetCaptcha(ctx, map[string]string{
+			"v":       getCaptchaVersion,
+			"sitekey": sitekey,
+			"host":    host,
+			"hl":      "en",
+		})
+		claimCh <- claimResult{status: status, body: body, err: cerr}
+	}()
+
+	jwt, location, key, encGetReq, err := fetchChecksite(ctx, sitekey, host)
 	if err != nil {
+		<-claimCh // join the speculative claim before returning
 		return SolveInfo{}, nil, fmt.Errorf("hcaptcha: getcaptcha: fetch challenge: %w", err)
 	}
+
+	if encGetReq {
+		// Encrypted-only fast path: adopt the speculative claim (or claim
+		// fresh if it failed) and skip the plaintext variants.
+		claim := <-claimCh
+		var pclaim *claimResult
+		if claim.err == nil {
+			pclaim = &claim
+		}
+		at, info := runEncryptedAttempt(ctx, sitekey, host, pclaim)
+		info.Elapsed = time.Since(start)
+		return info, []CaptchaAttempt{at}, nil
+	}
+
+	// Legacy route: discard the speculative claim and solve the
+	// checksiteconfig challenge for the plaintext variants.
+	<-claimCh
+
 	pow, err := hcaptchapow.ParsePow(jwt)
 	if err != nil {
 		return SolveInfo{JWT: jwt, Location: location, Key: key}, nil,
@@ -373,12 +425,13 @@ func CaptchaAttempts(ctx context.Context, sitekey, host string) (solve SolveInfo
 		}
 	}
 
-	// Encrypted submission: when features.enc_get_req is set the widget claims
-	// a challenge through getcaptcha itself, solves it, wraps the params
-	// (minus c) with the hsw WASM (mode 1) and submits msgpack [c-spec,
-	// ext18(cipher)] as octet-stream; the answer arrives wasm-encrypted
-	// (mode 0) or as plaintext JSON on failure.
-	at := runEncryptedAttempt(ctx, solver, sitekey, host)
+	// Encrypted fallback on a fresh claim (the speculative one was discarded
+	// above). When features.enc_get_req is set the widget claims a challenge
+	// through getcaptcha itself, solves it, wraps the params (minus c) with
+	// the hsw WASM (mode 1) and submits msgpack [c-spec, ext18(cipher)] as
+	// octet-stream; the answer arrives wasm-encrypted (mode 0) or as
+	// plaintext JSON on failure.
+	at, _ := runEncryptedAttempt(ctx, sitekey, host, nil)
 	attempts = append(attempts, at)
 	return solve, attempts, nil
 }
@@ -386,7 +439,14 @@ func CaptchaAttempts(ctx context.Context, sitekey, host string) (solve SolveInfo
 // runEncryptedAttempt performs the widget-faithful encrypted getcaptcha
 // submission: phase-A claim via getcaptcha (no n), solve the claimed jwt,
 // encrypt the params and submit the [spec, ext18(cipher)] wire.
-func runEncryptedAttempt(ctx context.Context, solver *hsw.Solver, sitekey, host string) (at CaptchaAttempt) {
+//
+// claim, when non-nil, is a pre-fetched phase-A claim (the speculative one
+// fired at t=0); when nil a fresh claim is POSTed. The solver is derived from
+// the claimed challenge's own bundle location, so this path is independent of
+// the checksiteconfig challenge. The returned SolveInfo describes the claimed
+// challenge (JWT/location/fingerprint/n) so callers can surface its decode
+// timing and difficulty.
+func runEncryptedAttempt(ctx context.Context, sitekey, host string, claim *claimResult) (at CaptchaAttempt, info SolveInfo) {
 	params := map[string]string{
 		"v":       getCaptchaVersion,
 		"sitekey": sitekey,
@@ -398,19 +458,37 @@ func runEncryptedAttempt(ctx context.Context, solver *hsw.Solver, sitekey, host 
 	defer func() { at.Elapsed = time.Since(t0) }()
 
 	// Phase A: claim a challenge from getcaptcha (n absent), like the widget.
-	status, claim, err := postGetCaptcha(ctx, params)
-	at.Status, at.Body = status, claim
+	var status int
+	var claimBody []byte
+	var err error
+	if claim != nil {
+		status, claimBody, err = claim.status, claim.body, claim.err
+	} else {
+		status, claimBody, err = postGetCaptcha(ctx, params)
+	}
+	at.Status, at.Body = status, claimBody
 	if err != nil {
 		at.Err = fmt.Errorf("hcaptcha: getcaptcha: claim: %w", err)
 		return
 	}
-	spec, jwt, perr := specFromClaim(claim)
+	spec, jwt, perr := specFromClaim(claimBody)
 	if perr != nil {
 		at.Err = fmt.Errorf("hcaptcha: getcaptcha: claim: %w", perr)
 		return
 	}
 
-	// Solve the claimed challenge with the in-process pipeline.
+	// Solve the claimed challenge with the in-process pipeline. The solver is
+	// keyed by the claimed JWT's own bundle location.
+	location, perr := hsw.LocationFromJWT(jwt)
+	if perr != nil {
+		at.Err = fmt.Errorf("hcaptcha: getcaptcha: claim location: %w", perr)
+		return
+	}
+	solver, perr := solverFor(ctx, location)
+	if perr != nil {
+		at.Err = fmt.Errorf("hcaptcha: getcaptcha: load solver: %w", perr)
+		return
+	}
 	pow, perr := hcaptchapow.ParsePow(jwt)
 	if perr != nil {
 		at.Err = fmt.Errorf("hcaptcha: getcaptcha: parse claimed pow: %w", perr)
@@ -426,6 +504,7 @@ func runEncryptedAttempt(ctx context.Context, solver *hsw.Solver, sitekey, host 
 		at.Err = fmt.Errorf("hcaptcha: getcaptcha: solve claimed challenge: %w", perr)
 		return
 	}
+	info = SolveInfo{JWT: jwt, Location: location, Fingerprint: fpB64, N: n}
 
 	sub := map[string]string{"n": n}
 	for k, v := range params {

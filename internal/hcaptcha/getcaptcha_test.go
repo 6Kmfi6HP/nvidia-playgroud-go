@@ -139,8 +139,8 @@ func offlineCaptchaEnv(t *testing.T, post func(ctx context.Context, params map[s
 	const location = "/c/getcaptcha-test-loc"
 	jwt = fakeJWT(t, location)
 	key = "c0ffee-0000-4000-8000-000000000000"
-	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, error) {
-		return jwt, location, key, nil
+	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, bool, error) {
+		return jwt, location, key, false, nil
 	}
 	loadSolver = func(ctx context.Context, l string) (*hsw.Solver, error) {
 		b, err := hsw.Prepare([]byte(fakeV1Body))
@@ -244,11 +244,14 @@ func TestCaptchaTokenErrorAggregation(t *testing.T) {
 // P1_ token.
 func TestCaptchaTokenEncrypted(t *testing.T) {
 	const tok = "P1_eyJlbmNyeXB0ZWQudG9rZW4ifQ.offline"
+	// Precompute the claim JWT outside the fake: the speculative claim may
+	// fire from a goroutine where t.Fatal is unsafe.
+	claimJWT := fakeJWT(t, "/c/getcaptcha-test-loc")
 	_, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
 		// The encrypted flow claims via getcaptcha: first call (no n) must
 		// return a challenge spec; later plaintext variants fail.
 		if params["n"] == "" && params["c"] == "" {
-			return 200, []byte(`{"c":{"type":"hsw","req":"` + fakeJWT(t, "/c/getcaptcha-test-loc") + `"}}`), nil
+			return 200, []byte(`{"c":{"type":"hsw","req":"` + claimJWT + `"}}`), nil
 		}
 		return 200, []byte(`{"pass":false,"error-codes":["invalid-data"]}`), nil
 	})
@@ -314,12 +317,15 @@ func TestCaptchaAttemptsStageErrors(t *testing.T) {
 	defer func() { fetchChecksite, loadSolver, postGetCaptcha = oldFetch, oldLoad, oldPost }()
 	defer CloseSolvers()
 
-	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, error) {
-		return "", "", "", errors.New("offline checksite")
+	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, bool, error) {
+		return "", "", "", false, errors.New("offline checksite")
 	}
 	loadSolver = func(ctx context.Context, l string) (*hsw.Solver, error) { return nil, errors.New("unused") }
+	// The speculative claim fires at t=0 and reaches this fake; its failure is
+	// discarded when checksite errors out, so no variant/encrypted call may
+	// follow.
 	postGetCaptcha = func(ctx context.Context, params map[string]string) (int, []byte, error) {
-		return 0, nil, errors.New("must not be called")
+		return 0, nil, errors.New("speculative claim only")
 	}
 
 	_, _, err := CaptchaAttempts(context.Background(), "sitekey", "host")
@@ -350,5 +356,57 @@ func writeTestBody(t *testing.T, w http.ResponseWriter, b []byte) {
 	t.Helper()
 	if _, err := w.Write(b); err != nil {
 		t.Errorf("write test response: %v", err)
+	}
+}
+
+// TestCaptchaAttemptsEncGate verifies the features.enc_get_req fast path: when
+// the site declares encrypted-only getcaptcha, CaptchaAttempts skips the
+// checksiteconfig challenge solve and the plaintext variants entirely,
+// submitting the speculatively claimed challenge over the encrypted wire as
+// the single attempt.
+func TestCaptchaAttemptsEncGate(t *testing.T) {
+	const tok = "P1_eyJlbmNnYXRlLnRva2VuIn0.offline"
+	claimJWT := fakeJWT(t, "/c/enc-gate-loc")
+	_, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
+		// The speculative claim (no n, no c) returns a challenge spec.
+		if params["n"] == "" && params["c"] == "" {
+			return 200, []byte(`{"c":{"type":"hsw","req":"` + claimJWT + `"}}`), nil
+		}
+		// No plaintext variant may be reached on the enc fast path.
+		t.Errorf("plaintext variant reached on enc fast path: %v", params)
+		return 200, []byte(`{"pass":false}`), nil
+	})
+	defer cleanup()
+
+	// Declare the site encrypted-only.
+	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, bool, error) {
+		return "", "", "", true, nil
+	}
+
+	oldOctet := postGetCaptchaOctetFn
+	defer func() { postGetCaptchaOctetFn = oldOctet }()
+	postGetCaptchaOctetFn = func(ctx context.Context, sitekey string, body []byte) (int, []byte, error) {
+		resp := msgpackEncodeMapString(map[string]string{"pass": "true"})
+		return 200, appendMsgpackKV(resp, "generated_pass_UUID", tok), nil
+	}
+
+	solve, attempts, err := CaptchaAttempts(context.Background(), "sitekey", "host")
+	if err != nil {
+		t.Fatalf("CaptchaAttempts (enc gate): %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %d, want 1 (enc fast path skips variants)", len(attempts))
+	}
+	if attempts[0].Name != "encrypted-claim" {
+		t.Errorf("attempt name = %q, want encrypted-claim", attempts[0].Name)
+	}
+	if attempts[0].Token != tok {
+		t.Errorf("attempt token = %q, want %q", attempts[0].Token, tok)
+	}
+	if solve.JWT != claimJWT {
+		t.Errorf("solve.JWT = %q, want the claimed JWT", solve.JWT)
+	}
+	if solve.N == "" {
+		t.Error("solve.N empty, want the solved n")
 	}
 }

@@ -224,8 +224,8 @@ func TestSolverCacheReusesSolver(t *testing.T) {
 	}()
 
 	const loc = "/c/282d0ff"
-	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, error) {
-		return fakeJWT(t, loc), loc, "key", nil
+	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, bool, error) {
+		return fakeJWT(t, loc), loc, "key", false, nil
 	}
 	loads := 0
 	loadSolver = func(ctx context.Context, location string) (*hsw.Solver, error) {

@@ -74,8 +74,11 @@ type ChecksiteResponse struct {
 		Key  string `json:"key"`
 		JWT  string `json:"jwt"`
 	} `json:"c"`
-	L    string `json:"l"`
-	Pass bool   `json:"pass"`
+	L        string `json:"l"`
+	Pass     bool   `json:"pass"`
+	Features struct {
+		EncGetReq bool `json:"enc_get_req"`
+	} `json:"features"`
 }
 
 // FetchChallenge calls checksiteconfig for a sitekey/host and returns the hsw

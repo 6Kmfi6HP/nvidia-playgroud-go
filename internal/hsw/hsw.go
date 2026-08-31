@@ -25,48 +25,118 @@ import (
 )
 
 const (
-	// DefaultSolveTimeout bounds one hsw solve (wasm PoW can be slow).
-	DefaultSolveTimeout = 60 * time.Second
+	// DefaultSolveTimeout bounds how long a single SolveN/Crypto execution
+	// may wait for V8 promise fulfillment before giving up.
+	DefaultSolveTimeout = 10 * time.Second
 
-	poolInterval = 2 * time.Millisecond
+	// poolInterval is how frequently we yield the Go runtime between V8
+	// microtask checkpoints while waiting for promise fulfillment.
+	poolInterval = 5 * time.Millisecond
 )
 
-// Solver owns a V8 isolate and executes hsw bundles on demand.
-// An isolate is single-threaded: SolveN serializes access with a mutex.
+// Solver encapsulates an isolate running a prepared hsw bundle.
 type Solver struct {
-	mu     sync.Mutex
-	iso    *v8.Isolate
-	bundle *Bundle
+	mu       sync.Mutex
+	bundle   *Bundle
+	iso      *v8.Isolate
+	vctx     *v8.Context
+	fnSolve  *v8.Function
+	fnCrypto *v8.Function
 }
 
-// New creates a Solver from a prepared bundle. The isolate is created lazily
-// on first use so tests that only exercise Prepare never pay the cgo cost.
+// New constructs a Solver from a prepared Bundle. The V8 isolate and context
+// are initialized and the bundle evaluated once so that subsequent calls to
+// SolveN and Crypto execute directly against pre-compiled function exports.
 func New(b *Bundle) (*Solver, error) {
 	if b == nil || b.Source == "" {
 		return nil, fmt.Errorf("hsw: empty bundle")
 	}
-	return &Solver{bundle: b}, nil
+	s := &Solver{
+		bundle: b,
+	}
+	if err := s.init(); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
-// LoadSolver downloads, patches and wraps hsw.js for location, then returns a
-// ready-to-use Solver.
+// init initializes the persistent V8 isolate, context, and pre-resolves exported functions.
+func (s *Solver) init() error {
+	if s.iso != nil && s.vctx != nil && s.fnSolve != nil {
+		return nil
+	}
+
+	if s.iso == nil {
+		s.iso = v8.NewIsolate()
+	}
+	if s.vctx == nil {
+		s.vctx = v8.NewContext(s.iso)
+	}
+
+	if err := injectBase64(s.vctx, s.iso); err != nil {
+		return fmt.Errorf("hsw: inject atob/btoa: %w", err)
+	}
+
+	name := s.bundle.Location
+	if name == "" {
+		name = "hsw.js"
+	}
+	if _, err := s.vctx.RunScript(s.bundle.Source, name); err != nil {
+		return fmt.Errorf("hsw: eval %s: %w", name, jsErr(err))
+	}
+
+	modVal, err := s.vctx.Global().Get("module")
+	if err != nil {
+		return fmt.Errorf("hsw: module lookup: %w", err)
+	}
+	if !modVal.IsObject() {
+		return fmt.Errorf("hsw: module is not an object: %w", err)
+	}
+	exportsVal, err := modVal.Object().Get("exports")
+	if err != nil {
+		return fmt.Errorf("hsw: module.exports lookup: %w", err)
+	}
+	if exportsVal.IsUndefined() {
+		return fmt.Errorf("hsw: module.exports is undefined (bundle variant %q unsupported?)", s.bundle.Version)
+	}
+	fnSolve, err := exportsVal.AsFunction()
+	if err != nil {
+		return fmt.Errorf("hsw: module.exports is not a function (variant %q): %w", s.bundle.Version, err)
+	}
+	s.fnSolve = fnSolve
+
+	fnCryptoVal, err := s.vctx.RunScript(hccryptoAdapter, "hccrypto-adapter.js")
+	if err == nil && fnCryptoVal.IsFunction() {
+		s.fnCrypto, _ = fnCryptoVal.AsFunction()
+	}
+	return nil
+}
+
+// Close releases the underlying V8 context and isolate.
+func (s *Solver) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.fnSolve = nil
+	s.fnCrypto = nil
+	if s.vctx != nil {
+		s.vctx.Close()
+		s.vctx = nil
+	}
+	if s.iso != nil {
+		s.iso.Close()
+		s.iso = nil
+	}
+}
+
+// LoadSolver downloads, prepares, and instantiates a Solver for location.
 func LoadSolver(ctx context.Context, location string) (*Solver, error) {
 	b, err := Load(ctx, location)
 	if err != nil {
 		return nil, err
 	}
 	return New(b)
-}
-
-// Close disposes the V8 isolate, releasing its memory. Safe to call multiple
-// times; no-op before the isolate was created.
-func (s *Solver) Close() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.iso != nil {
-		s.iso.Dispose()
-		s.iso = nil
-	}
 }
 
 // SolveN runs module.exports(jwt, fpB64) and returns the resolved n.
@@ -79,47 +149,14 @@ func (s *Solver) SolveN(ctx context.Context, jwt, fpB64 string) (string, error) 
 	if s.bundle == nil || s.bundle.Source == "" {
 		return "", fmt.Errorf("hsw: empty bundle")
 	}
-	if s.iso == nil {
-		s.iso = v8.NewIsolate()
+	if s.vctx == nil || s.fnSolve == nil {
+		if err := s.init(); err != nil {
+			return "", err
+		}
 	}
 
 	deadline, cancel := context.WithTimeout(ctx, DefaultSolveTimeout)
 	defer cancel()
-
-	vctx := v8.NewContext(s.iso)
-	defer vctx.Close()
-
-	if err := injectBase64(vctx, s.iso); err != nil {
-		return "", fmt.Errorf("hsw: inject atob/btoa: %w", err)
-	}
-
-	name := "hsw.js"
-	if s.bundle.Location != "" {
-		name = s.bundle.Location + "/hsw.js"
-	}
-	if _, err := vctx.RunScript(s.bundle.Source, name); err != nil {
-		return "", fmt.Errorf("hsw: eval %s: %w", name, jsErr(err))
-	}
-
-	modVal, err := vctx.Global().Get("module")
-	if err != nil {
-		return "", fmt.Errorf("hsw: module lookup: %w", err)
-	}
-	modObj, err := modVal.AsObject()
-	if err != nil {
-		return "", fmt.Errorf("hsw: module is not an object: %w", err)
-	}
-	exportsVal, err := modObj.Get("exports")
-	if err != nil {
-		return "", fmt.Errorf("hsw: module.exports lookup: %w", err)
-	}
-	if exportsVal.IsUndefined() || exportsVal.IsNull() {
-		return "", fmt.Errorf("hsw: module.exports is undefined (bundle variant %q unsupported?)", s.bundle.Version)
-	}
-	fn, err := exportsVal.AsFunction()
-	if err != nil {
-		return "", fmt.Errorf("hsw: module.exports is not a function (variant %q): %w", s.bundle.Version, err)
-	}
 
 	jwtVal, err := v8.NewValue(s.iso, jwt)
 	if err != nil {
@@ -130,7 +167,7 @@ func (s *Solver) SolveN(ctx context.Context, jwt, fpB64 string) (string, error) 
 		return "", fmt.Errorf("hsw: fingerprint arg: %w", err)
 	}
 
-	res, err := fn.Call(vctx.Global(), jwtVal, fpVal)
+	res, err := s.fnSolve.Call(s.vctx.Global(), jwtVal, fpVal)
 	if err != nil {
 		return "", fmt.Errorf("hsw: call module.exports: %w", jsErr(err))
 	}
@@ -148,7 +185,7 @@ func (s *Solver) SolveN(ctx context.Context, jwt, fpB64 string) (string, error) 
 		if deadline.Err() != nil {
 			return "", fmt.Errorf("hsw: solve timed out after %s", DefaultSolveTimeout)
 		}
-		vctx.PerformMicrotaskCheckpoint()
+		s.vctx.PerformMicrotaskCheckpoint()
 		if p.State() == v8.Pending {
 			select {
 			case <-deadline.Done():
@@ -186,8 +223,8 @@ const hccryptoAdapter = `
     return u;
   }
   function bytesToB64(u8) {
-    if (u8 && u8.buffer instanceof ArrayBuffer && !(u8 instanceof Uint8Array)) {
-      u8 = new Uint8Array(u8.buffer, u8.byteOffset, u8.byteLength);
+    if (!u8 || typeof u8.length !== "number") {
+      return btoa(String(u8 || ""));
     }
     var out = [];
     for (var i = 0; i < u8.length; i += 0x8000) {
@@ -216,33 +253,18 @@ func (s *Solver) Crypto(ctx context.Context, mode int, data []byte) ([]byte, err
 	if s.bundle == nil || s.bundle.Source == "" {
 		return nil, fmt.Errorf("hsw: empty bundle")
 	}
-	if s.iso == nil {
-		s.iso = v8.NewIsolate()
+	if s.vctx == nil || s.fnCrypto == nil {
+		if err := s.init(); err != nil {
+			return nil, err
+		}
 	}
+	if s.fnCrypto == nil {
+		return nil, fmt.Errorf("hsw: crypto adapter unavailable")
+	}
+
 	deadline, cancel := context.WithTimeout(ctx, DefaultSolveTimeout)
 	defer cancel()
 
-	vctx := v8.NewContext(s.iso)
-	defer vctx.Close()
-
-	if err := injectBase64(vctx, s.iso); err != nil {
-		return nil, fmt.Errorf("hsw: inject atob/btoa: %w", err)
-	}
-	name := "hsw.js"
-	if s.bundle.Location != "" {
-		name = s.bundle.Location + "/hsw.js"
-	}
-	if _, err := vctx.RunScript(s.bundle.Source, name); err != nil {
-		return nil, fmt.Errorf("hsw: eval %s: %w", name, jsErr(err))
-	}
-	fnVal, err := vctx.RunScript(hccryptoAdapter, "hccrypto-adapter.js")
-	if err != nil {
-		return nil, fmt.Errorf("hsw: eval crypto adapter: %w", err)
-	}
-	fn, err := fnVal.AsFunction()
-	if err != nil {
-		return nil, fmt.Errorf("hsw: crypto adapter is not a function: %w", err)
-	}
 	modeVal, err := v8.NewValue(s.iso, int32(mode))
 	if err != nil {
 		return nil, fmt.Errorf("hsw: crypto mode arg: %w", err)
@@ -251,7 +273,8 @@ func (s *Solver) Crypto(ctx context.Context, mode int, data []byte) ([]byte, err
 	if err != nil {
 		return nil, fmt.Errorf("hsw: crypto data arg: %w", err)
 	}
-	res, err := fn.Call(vctx.Global(), modeVal, dataVal)
+
+	res, err := s.fnCrypto.Call(s.vctx.Global(), modeVal, dataVal)
 	if err != nil {
 		return nil, fmt.Errorf("hsw: call crypto mode %d: %w", mode, jsErr(err))
 	}
@@ -262,11 +285,12 @@ func (s *Solver) Crypto(ctx context.Context, mode int, data []byte) ([]byte, err
 	if err != nil {
 		return nil, fmt.Errorf("hsw: crypto result is not a promise: %w", err)
 	}
+
 	for p.State() == v8.Pending {
 		if deadline.Err() != nil {
 			return nil, fmt.Errorf("hsw: crypto mode %d timed out after %s", mode, DefaultSolveTimeout)
 		}
-		vctx.PerformMicrotaskCheckpoint()
+		s.vctx.PerformMicrotaskCheckpoint()
 		if p.State() == v8.Pending {
 			select {
 			case <-deadline.Done():
@@ -274,6 +298,7 @@ func (s *Solver) Crypto(ctx context.Context, mode int, data []byte) ([]byte, err
 			}
 		}
 	}
+
 	if p.State() == v8.Rejected {
 		errVal := p.Result()
 		msg := errVal.String()
@@ -284,6 +309,7 @@ func (s *Solver) Crypto(ctx context.Context, mode int, data []byte) ([]byte, err
 		}
 		return nil, fmt.Errorf("hsw: crypto mode %d rejected: %s", mode, msg)
 	}
+
 	b64 := p.Result().String()
 	return base64.StdEncoding.DecodeString(b64)
 }
@@ -298,79 +324,62 @@ func (s *Solver) Crypto(ctx context.Context, mode int, data []byte) ([]byte, err
 func injectBase64(ctx *v8.Context, iso *v8.Isolate) error {
 	atob := v8.NewFunctionTemplateWithError(iso, func(info *v8.FunctionCallbackInfo) (*v8.Value, error) {
 		s := ""
-		if len(info.Args()) > 0 {
+		if len(info.Args()) > 0 && !info.Args()[0].IsUndefined() && !info.Args()[0].IsNull() {
 			s = info.Args()[0].String()
 		}
-		dec, err := lenientBase64Decode(s)
+		raw, err := lenientBase64Decode(s)
 		if err != nil {
 			return nil, fmt.Errorf("atob: %w", err)
 		}
-		return v8.NewValue(iso, binaryString(dec))
-	})
-	btoa := v8.NewFunctionTemplateWithError(iso, func(info *v8.FunctionCallbackInfo) (*v8.Value, error) {
-		if len(info.Args()) < 1 {
-			return v8.NewValue(iso, "")
+		// Latin-1 string: JavaScript characters 0..255 matching byte values.
+		// v8.NewValue interprets Go strings as UTF-8, so build a UTF-8 string
+		// whose rune values match each input byte.
+		runes := make([]rune, len(raw))
+		for i, b := range raw {
+			runes[i] = rune(b)
 		}
-		b, err := fromBinaryString(info.Args()[0].String())
-		if err != nil {
-			return nil, fmt.Errorf("btoa: %w", err)
-		}
-		return v8.NewValue(iso, base64.StdEncoding.EncodeToString(b))
+		return v8.NewValue(iso, string(runes))
 	})
-
 	if err := ctx.Global().Set("atob", atob.GetFunction(ctx)); err != nil {
 		return err
 	}
+
+	btoa := v8.NewFunctionTemplateWithError(iso, func(info *v8.FunctionCallbackInfo) (*v8.Value, error) {
+		s := ""
+		if len(info.Args()) > 0 && !info.Args()[0].IsUndefined() && !info.Args()[0].IsNull() {
+			s = info.Args()[0].String()
+		}
+		raw, err := fromBinaryString(s)
+		if err != nil {
+			return nil, fmt.Errorf("btoa: %w", err)
+		}
+		return v8.NewValue(iso, base64.StdEncoding.EncodeToString(raw))
+	})
 	return ctx.Global().Set("btoa", btoa.GetFunction(ctx))
 }
 
-// lenientBase64Decode decodes base64 accepting whitespace, missing padding
-// and the url-safe alphabet's - and _ characters.
+// lenientBase64Decode strips whitespace and pads missing '=' before decoding.
+// Also translates base64url characters (- / _) to standard (+ / /).
 func lenientBase64Decode(s string) ([]byte, error) {
-	t := s
-	// Drop whitespace.
-	clean := make([]byte, 0, len(t))
-	for i := 0; i < len(t); i++ {
-		c := t[i]
-		switch c {
-		case ' ', '\t', '\n', '\r':
-			continue
-		case '-':
-			clean = append(clean, '+')
-		case '_':
-			clean = append(clean, '/')
-		default:
-			clean = append(clean, c)
-		}
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "\t", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "-", "+")
+	s = strings.ReplaceAll(s, "_", "/")
+	if rem := len(s) % 4; rem != 0 {
+		s += strings.Repeat("=", 4-rem)
 	}
-	// Drop padding (we re-add later if needed).
-	for len(clean) > 0 && clean[len(clean)-1] == '=' {
-		clean = clean[:len(clean)-1]
-	}
-	if len(clean)%4 == 1 {
-		return nil, fmt.Errorf("invalid base64 length")
-	}
-	b, err := base64.RawStdEncoding.DecodeString(string(clean))
+	raw, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
 		return nil, err
 	}
-	return b, nil
+	return raw, nil
 }
 
-// binaryString converts decoded bytes into a Go string that v8go maps back to
-// a JS string with charCodeAt(i) == byte i. v8go treats Go strings as UTF-8,
-// so naive string(dec) corrupts every byte >= 0x80 into U+FFFD; encoding each
-// byte as its own rune (U+0000..U+00FF) round-trips exactly.
-func binaryString(b []byte) string {
-	var sb strings.Builder
-	sb.Grow(len(b))
-	for _, c := range b {
-		sb.WriteRune(rune(c))
-	}
-	return sb.String()
-}
-
-// fromBinaryString reverses binaryString: each JS char (rune) is a byte.
+// fromBinaryString maps a JS binary string (where each rune is expected in
+// 0..255) back to []byte. Returns an error if any rune is outside that range,
+// matching DOMException "InvalidCharacterError".
 func fromBinaryString(s string) ([]byte, error) {
 	out := make([]byte, 0, len(s))
 	for _, r := range s {
