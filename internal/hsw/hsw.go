@@ -29,9 +29,13 @@ const (
 	// may wait for V8 promise fulfillment before giving up.
 	DefaultSolveTimeout = 10 * time.Second
 
-	// poolInterval is how frequently we yield the Go runtime between V8
-	// microtask checkpoints while waiting for promise fulfillment.
-	poolInterval = 5 * time.Millisecond
+	// poolInterval caps how long one wait-for-promise iteration sleeps between
+	// V8 microtask checkpoints. The wait backs off from spin to this cap so a
+	// fast-resolving promise (the common case) is noticed within microseconds
+	// while a stuck one does not burn CPU.
+	poolInterval  = 5 * time.Millisecond
+	spinInterval  = 50 * time.Microsecond
+	backoffFactor = 2
 )
 
 // Solver encapsulates an isolate running a prepared hsw bundle.
@@ -40,6 +44,7 @@ type Solver struct {
 	bundle   *Bundle
 	iso      *v8.Isolate
 	vctx     *v8.Context
+	global   *v8.Object // cached context global (v8go allocates a tracked value per Global() call)
 	fnSolve  *v8.Function
 	fnCrypto *v8.Function
 }
@@ -86,10 +91,17 @@ func (s *Solver) init() error {
 		return fmt.Errorf("hsw: eval %s: %w", name, jsErr(err))
 	}
 
-	modVal, err := s.vctx.Global().Get("module")
+	// Hold the global object handle for the solver's lifetime: every v8go
+	// Global() call registers a new tracked value in the context, so
+	// re-fetching it per solve leaks one handle per call.
+	global := s.vctx.Global()
+	s.global = global
+
+	modVal, err := global.Get("module")
 	if err != nil {
 		return fmt.Errorf("hsw: module lookup: %w", err)
 	}
+	defer modVal.Release()
 	if !modVal.IsObject() {
 		return fmt.Errorf("hsw: module is not an object: %w", err)
 	}
@@ -98,18 +110,29 @@ func (s *Solver) init() error {
 		return fmt.Errorf("hsw: module.exports lookup: %w", err)
 	}
 	if exportsVal.IsUndefined() {
+		exportsVal.Release()
 		return fmt.Errorf("hsw: module.exports is undefined (bundle variant %q unsupported?)", s.bundle.Version)
 	}
-	fnSolve, err := exportsVal.AsFunction()
-	if err != nil {
-		return fmt.Errorf("hsw: module.exports is not a function (variant %q): %w", s.bundle.Version, err)
+	if !exportsVal.IsFunction() {
+		exportsVal.Release()
+		return fmt.Errorf("hsw: module.exports is not a function (variant %q)", s.bundle.Version)
 	}
-	s.fnSolve = fnSolve
+	// AsFunction aliases the same underlying handle as exportsVal: the
+	// handle's ownership transfers to s.fnSolve (released in Close), so
+	// exportsVal itself must not be released here.
+	s.fnSolve = &v8.Function{Value: exportsVal}
 
 	fnCryptoVal, err := s.vctx.RunScript(hccryptoAdapter, "hccrypto-adapter.js")
-	if err == nil && fnCryptoVal.IsFunction() {
-		s.fnCrypto, _ = fnCryptoVal.AsFunction()
+	if err != nil {
+		// The crypto adapter is optional; the solve path still works.
+		return nil
 	}
+	if !fnCryptoVal.IsFunction() {
+		fnCryptoVal.Release()
+		return nil
+	}
+	// Same aliasing rule: the handle moves into s.fnCrypto.
+	s.fnCrypto = &v8.Function{Value: fnCryptoVal}
 	return nil
 }
 
@@ -118,8 +141,18 @@ func (s *Solver) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.fnSolve = nil
-	s.fnCrypto = nil
+	if s.fnSolve != nil {
+		s.fnSolve.Release()
+		s.fnSolve = nil
+	}
+	if s.fnCrypto != nil {
+		s.fnCrypto.Release()
+		s.fnCrypto = nil
+	}
+	if s.global != nil {
+		s.global.Release()
+		s.global = nil
+	}
 	if s.vctx != nil {
 		s.vctx.Close()
 		s.vctx = nil
@@ -142,6 +175,11 @@ func LoadSolver(ctx context.Context, location string) (*Solver, error) {
 // SolveN runs module.exports(jwt, fpB64) and returns the resolved n.
 // The caller-provided context is honored for cancellation; a hard timeout of
 // DefaultSolveTimeout always applies.
+//
+// Every v8go value created here (arguments, call result, promise result) is
+// registered in the context's tracked-value table and kept alive until
+// explicitly released. On a long-lived cached Solver an unreleased value is a
+// permanent V8-heap leak, so all values are released before returning.
 func (s *Solver) SolveN(ctx context.Context, jwt, fpB64 string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,15 +200,18 @@ func (s *Solver) SolveN(ctx context.Context, jwt, fpB64 string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("hsw: jwt arg: %w", err)
 	}
+	defer jwtVal.Release()
 	fpVal, err := v8.NewValue(s.iso, fpB64)
 	if err != nil {
 		return "", fmt.Errorf("hsw: fingerprint arg: %w", err)
 	}
+	defer fpVal.Release()
 
-	res, err := s.fnSolve.Call(s.vctx.Global(), jwtVal, fpVal)
+	res, err := s.fnSolve.Call(s.global, jwtVal, fpVal)
 	if err != nil {
 		return "", fmt.Errorf("hsw: call module.exports: %w", jsErr(err))
 	}
+	defer res.Release()
 
 	if !res.IsPromise() {
 		// Non-promise variants that resolve synchronously return the n string.
@@ -181,29 +222,45 @@ func (s *Solver) SolveN(ctx context.Context, jwt, fpB64 string) (string, error) 
 		return "", fmt.Errorf("hsw: result is not a promise: %w", err)
 	}
 
-	for p.State() == v8.Pending {
-		if deadline.Err() != nil {
-			return "", fmt.Errorf("hsw: solve timed out after %s", DefaultSolveTimeout)
-		}
+	if p.State() == v8.Pending {
 		s.vctx.PerformMicrotaskCheckpoint()
-		if p.State() == v8.Pending {
-			select {
-			case <-deadline.Done():
-			case <-time.After(poolInterval):
+	}
+
+	if p.State() == v8.Pending {
+		timer := time.NewTimer(spinInterval)
+		defer timer.Stop()
+		wait := spinInterval
+		for p.State() == v8.Pending {
+			if deadline.Err() != nil {
+				return "", fmt.Errorf("hsw: solve timed out after %s", DefaultSolveTimeout)
+			}
+			s.vctx.PerformMicrotaskCheckpoint()
+			if p.State() == v8.Pending {
+				select {
+				case <-deadline.Done():
+				case <-timer.C:
+					wait *= backoffFactor
+					if wait > poolInterval {
+						wait = poolInterval
+					}
+					timer.Reset(wait)
+				}
 			}
 		}
 	}
 
+	resultVal := p.Result()
+	defer resultVal.Release()
 	if p.State() == v8.Fulfilled {
-		return p.Result().String(), nil
+		return resultVal.String(), nil
 	}
 
 	// Rejected: surface the JS error's message if available.
-	errVal := p.Result()
-	msg := errVal.String()
-	if errVal.IsObject() {
-		if m, e := errVal.Object().Get("message"); e == nil && !m.IsUndefined() {
+	msg := resultVal.String()
+	if resultVal.IsObject() {
+		if m, e := resultVal.Object().Get("message"); e == nil && !m.IsUndefined() {
 			msg = m.String()
+			m.Release()
 		}
 	}
 	return "", fmt.Errorf("hsw: solve rejected: %s", msg)
@@ -269,15 +326,18 @@ func (s *Solver) Crypto(ctx context.Context, mode int, data []byte) ([]byte, err
 	if err != nil {
 		return nil, fmt.Errorf("hsw: crypto mode arg: %w", err)
 	}
+	defer modeVal.Release()
 	dataVal, err := v8.NewValue(s.iso, base64.StdEncoding.EncodeToString(data))
 	if err != nil {
 		return nil, fmt.Errorf("hsw: crypto data arg: %w", err)
 	}
+	defer dataVal.Release()
 
-	res, err := s.fnCrypto.Call(s.vctx.Global(), modeVal, dataVal)
+	res, err := s.fnCrypto.Call(s.global, modeVal, dataVal)
 	if err != nil {
 		return nil, fmt.Errorf("hsw: call crypto mode %d: %w", mode, jsErr(err))
 	}
+	defer res.Release()
 	if !res.IsPromise() {
 		return nil, fmt.Errorf("hsw: crypto mode %d did not return a promise", mode)
 	}
@@ -286,31 +346,48 @@ func (s *Solver) Crypto(ctx context.Context, mode int, data []byte) ([]byte, err
 		return nil, fmt.Errorf("hsw: crypto result is not a promise: %w", err)
 	}
 
-	for p.State() == v8.Pending {
-		if deadline.Err() != nil {
-			return nil, fmt.Errorf("hsw: crypto mode %d timed out after %s", mode, DefaultSolveTimeout)
-		}
+	if p.State() == v8.Pending {
 		s.vctx.PerformMicrotaskCheckpoint()
-		if p.State() == v8.Pending {
-			select {
-			case <-deadline.Done():
-			case <-time.After(poolInterval):
+	}
+
+	if p.State() == v8.Pending {
+		timer := time.NewTimer(spinInterval)
+		defer timer.Stop()
+		wait := spinInterval
+		for p.State() == v8.Pending {
+			if deadline.Err() != nil {
+				return nil, fmt.Errorf("hsw: crypto mode %d timed out after %s", mode, DefaultSolveTimeout)
+			}
+			s.vctx.PerformMicrotaskCheckpoint()
+			if p.State() == v8.Pending {
+				select {
+				case <-deadline.Done():
+				case <-timer.C:
+					wait *= backoffFactor
+					if wait > poolInterval {
+						wait = poolInterval
+					}
+					timer.Reset(wait)
+				}
 			}
 		}
 	}
 
+	resultVal := p.Result()
+	defer resultVal.Release()
+
 	if p.State() == v8.Rejected {
-		errVal := p.Result()
-		msg := errVal.String()
-		if errVal.IsObject() {
-			if m, e := errVal.Object().Get("message"); e == nil && !m.IsUndefined() {
+		msg := resultVal.String()
+		if resultVal.IsObject() {
+			if m, e := resultVal.Object().Get("message"); e == nil && !m.IsUndefined() {
 				msg = m.String()
+				m.Release()
 			}
 		}
 		return nil, fmt.Errorf("hsw: crypto mode %d rejected: %s", mode, msg)
 	}
 
-	b64 := p.Result().String()
+	b64 := resultVal.String()
 	return base64.StdEncoding.DecodeString(b64)
 }
 
@@ -322,7 +399,16 @@ func (s *Solver) Crypto(ctx context.Context, mode int, data []byte) ([]byte, err
 // base64url characters (- / _), which hCaptcha tokens and wasm chunks use in
 // various combinations.
 func injectBase64(ctx *v8.Context, iso *v8.Isolate) error {
+	// deferredRelease holds the previous callback return value. v8go's C++
+	// glue reads the returned handle after the Go callback returns, so a
+	// value cannot be released in the call that produced it; releasing the
+	// previous one instead bounds the leak to one handle per function.
+	var atobPrev, btoaPrev *v8.Value
+
 	atob := v8.NewFunctionTemplateWithError(iso, func(info *v8.FunctionCallbackInfo) (*v8.Value, error) {
+		// this/args are copied into the C++ glue before the callback runs;
+		// releasing them here is safe and prevents per-call handle leaks.
+		defer info.Release()
 		s := ""
 		if len(info.Args()) > 0 && !info.Args()[0].IsUndefined() && !info.Args()[0].IsNull() {
 			s = info.Args()[0].String()
@@ -334,17 +420,22 @@ func injectBase64(ctx *v8.Context, iso *v8.Isolate) error {
 		// Latin-1 string: JavaScript characters 0..255 matching byte values.
 		// v8.NewValue interprets Go strings as UTF-8, so build a UTF-8 string
 		// whose rune values match each input byte.
-		runes := make([]rune, len(raw))
-		for i, b := range raw {
-			runes[i] = rune(b)
+		val, err := v8.NewValue(iso, latin1ToUTF8(raw))
+		if err != nil {
+			return nil, fmt.Errorf("atob: %w", err)
 		}
-		return v8.NewValue(iso, string(runes))
+		if atobPrev != nil {
+			atobPrev.Release()
+		}
+		atobPrev = val
+		return val, nil
 	})
 	if err := ctx.Global().Set("atob", atob.GetFunction(ctx)); err != nil {
 		return err
 	}
 
 	btoa := v8.NewFunctionTemplateWithError(iso, func(info *v8.FunctionCallbackInfo) (*v8.Value, error) {
+		defer info.Release()
 		s := ""
 		if len(info.Args()) > 0 && !info.Args()[0].IsUndefined() && !info.Args()[0].IsNull() {
 			s = info.Args()[0].String()
@@ -353,9 +444,41 @@ func injectBase64(ctx *v8.Context, iso *v8.Isolate) error {
 		if err != nil {
 			return nil, fmt.Errorf("btoa: %w", err)
 		}
-		return v8.NewValue(iso, base64.StdEncoding.EncodeToString(raw))
+		val, err := v8.NewValue(iso, base64.StdEncoding.EncodeToString(raw))
+		if err != nil {
+			return nil, fmt.Errorf("btoa: %w", err)
+		}
+		if btoaPrev != nil {
+			btoaPrev.Release()
+		}
+		btoaPrev = val
+		return val, nil
 	})
 	return ctx.Global().Set("btoa", btoa.GetFunction(ctx))
+}
+
+// latin1ToUTF8 maps latin-1 bytes (0..255) to a UTF-8 string whose rune values
+// match each input byte, the representation v8.NewValue expects.
+func latin1ToUTF8(raw []byte) string {
+	ascii := true
+	for _, b := range raw {
+		if b >= 0x80 {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return string(raw)
+	}
+	buf := make([]byte, 0, len(raw)*2)
+	for _, b := range raw {
+		if b < 0x80 {
+			buf = append(buf, b)
+		} else {
+			buf = append(buf, 0xC0|(b>>6), 0x80|(b&0x3F))
+		}
+	}
+	return string(buf)
 }
 
 // lenientBase64Decode strips whitespace and pads missing '=' before decoding.
@@ -410,4 +533,27 @@ func (s *Solver) Bundle() *Bundle {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.bundle
+}
+
+// HeapStats returns the isolate's current V8 heap statistics. Diagnostic only;
+// callers must not hold SolveN/Crypto results across calls.
+func (s *Solver) HeapStats() v8.HeapStatistics {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.iso == nil {
+		return v8.HeapStatistics{}
+	}
+	return s.iso.GetHeapStatistics()
+}
+
+// RetainedValueCount returns how many v8go values are currently pinned by the
+// solver's context. Values accumulate when callers forget Release; the number
+// is a leak indicator.
+func (s *Solver) RetainedValueCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.vctx == nil {
+		return 0
+	}
+	return s.vctx.RetainedValueCount()
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"glm52-nvidia/internal/hcaptchapow"
 )
@@ -60,6 +61,68 @@ var hashRawByField = map[string][]byte{
 	"performance_hash": []byte("hcaptcha-phase1-performance-placeholder"),
 }
 
+// Template segments: the template is split once at the placeholder
+// boundaries so each fingerprint build assembles parts into one buffer
+// instead of running seven full-template ReplaceAll passes (~70KB of
+// transient garbage per solve under load).
+var (
+	segBeforeDif   string // up to __DIF__
+	segDifToData   string // __DIF__ .. __DATA__
+	segDataToLoc   string // __DATA__ .. __LOCATION__
+	segLocToRand   string // __LOCATION__ .. "_rand" (hash placeholders already substituted; ends after the comma)
+	segRandToStamp string // after rand float .. __STAMP__
+	segAfterRand   string // after __STAMP__ to the end
+)
+
+// hashVals are the deterministic component hashes; the placeholders inside
+// segLocToStamp were substituted at init.
+var hashVals = map[string]string{}
+
+func init() {
+	tpl := fpTemplate
+	for _, f := range []string{"canvas_hash", "parent_win_hash", "performance_hash"} {
+		hashVals[f] = hcaptchapow.HashString(hashRawByField[f])
+		tpl = strings.ReplaceAll(tpl, placeholderFor(f), hashVals[f])
+	}
+
+	var rest string
+	segBeforeDif, rest = cut2(tpl, "__DIF__")
+	segDifToData, rest = cut2(rest, "__DATA__")
+	segDataToLoc, rest = cut2(rest, "__LOCATION__")
+	// Between __LOCATION__ and the rand element the hash placeholders have
+	// already been substituted above, so this segment is fully static.
+	segLocToRand, rest = cut2(rest, "_rand")
+	segRandToStamp, segAfterRand = cut2(rest, "__STAMP__")
+}
+
+func cut2(s, placeholder string) (before, after string) {
+	i := strings.Index(s, placeholder)
+	if i < 0 {
+		panic("hcaptcha: fingerprint template missing placeholder " + placeholder)
+	}
+	return s[:i], s[i+len(placeholder):]
+}
+
+func placeholderFor(field string) string {
+	switch field {
+	case "canvas_hash":
+		return "__CANVAS_HASH__"
+	case "parent_win_hash":
+		return "__PARENT_WIN_HASH__"
+	case "performance_hash":
+		return "__PERF_HASH__"
+	}
+	return ""
+}
+
+// fpBufPool recycles fingerprint assembly buffers across solves.
+var fpBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 12288)
+		return &b
+	},
+}
+
 // BuildFingerprint renders the hCaptcha fingerprint JSON for the challenge
 // described by pow: proof_spec fields from the JWT (difficulty/data/location),
 // static sample components and fingerprint_events, deterministic xxh3 hash
@@ -69,31 +132,54 @@ func BuildFingerprint(pow *hcaptchapow.Pow) (string, error) {
 	if pow == nil || pow.PowData == "" || pow.Location == "" {
 		return "", fmt.Errorf("hcaptcha: fingerprint: pow missing data/location")
 	}
-	fp := fpTemplate
-	fp = strings.ReplaceAll(fp, "__DIF__", strconv.FormatFloat(pow.Difficulty, 'f', -1, 64))
-	fp = strings.ReplaceAll(fp, "__DATA__", pow.PowData)
-	fp = strings.ReplaceAll(fp, "__LOCATION__", locationURL(pow.Location))
-	fp = strings.ReplaceAll(fp, "__CANVAS_HASH__", hcaptchapow.HashString(hashRawByField["canvas_hash"]))
-	fp = strings.ReplaceAll(fp, "__PARENT_WIN_HASH__", hcaptchapow.HashString(hashRawByField["parent_win_hash"]))
-	fp = strings.ReplaceAll(fp, "__PERF_HASH__", hcaptchapow.HashString(hashRawByField["performance_hash"]))
+
 	stamp, err := hcaptchapow.MintStamp(uint(pow.Difficulty*2), pow.PowData)
 	if err != nil {
 		return "", fmt.Errorf("hcaptcha: fingerprint: mint stamp: %w", err)
 	}
-	fp = strings.ReplaceAll(fp, "__STAMP__", stamp)
 
-	if strings.Count(fp, "_rand") != 1 {
-		return "", fmt.Errorf("hcaptcha: fingerprint: internal rand placeholder")
-	}
+	bufp := fpBufPool.Get().(*[]byte)
+	buf := (*bufp)[:0]
+	buf = append(buf, segBeforeDif...)
+	buf = strconv.AppendFloat(buf, pow.Difficulty, 'f', -1, 64)
+	buf = append(buf, segDifToData...)
+	buf = append(buf, pow.PowData...)
+	buf = append(buf, segDataToLoc...)
+	buf = append(buf, locationURL(pow.Location)...)
+	buf = append(buf, segLocToRand...) // ends with "," right before the rand float
+
 	// CRC-32 over the payload with the second rand element removed, exactly
-	// as the reference builder computes it before splicing the float back in.
-	_, randVal := hcaptchapow.RandHash([]byte(strings.ReplaceAll(fp, ",_rand", "")))
-	fp = strings.ReplaceAll(fp, "_rand", strconv.FormatFloat(randVal, 'f', -1, 64))
+	// as the reference builder computes it before splicing the float back in:
+	// everything built so far (through the comma) + "]" + the tail with the
+	// stamp substituted. Built in a second pooled buffer; the main buffer is
+	// untouched.
+	crcp := fpBufPool.Get().(*[]byte)
+	crcBuf := (*crcp)[:0]
+	// ",_rand" is removed entirely: rand[0]'s closing bracket comes from the
+	// tail segment itself (segRandToStamp starts with "]").
+	crcBuf = append(crcBuf, buf[:len(buf)-1]...)
+	crcBuf = append(crcBuf, segRandToStamp...)
+	crcBuf = append(crcBuf, stamp...)
+	crcBuf = append(crcBuf, segAfterRand...)
+	_, randVal := hcaptchapow.RandHash(crcBuf)
+	*crcp = crcBuf[:0]
+	fpBufPool.Put(crcp)
 
-	if !json.Valid([]byte(fp)) {
+	buf = strconv.AppendFloat(buf, randVal, 'f', -1, 64)
+	buf = append(buf, segRandToStamp...)
+	buf = append(buf, stamp...)
+	buf = append(buf, segAfterRand...)
+
+	if !json.Valid(buf) {
+		*bufp = buf[:0]
+		fpBufPool.Put(bufp)
 		return "", fmt.Errorf("hcaptcha: fingerprint: produced invalid JSON")
 	}
-	return base64.StdEncoding.EncodeToString([]byte(fp)), nil
+	out := make([]byte, base64.StdEncoding.EncodedLen(len(buf)))
+	base64.StdEncoding.Encode(out, buf)
+	*bufp = buf[:0]
+	fpBufPool.Put(bufp)
+	return string(out), nil
 }
 
 // locationURL normalizes the JWT "l" claim into the absolute asset URL used
