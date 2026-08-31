@@ -87,7 +87,7 @@ type Pool struct {
 	mu        sync.Mutex
 	tokens    []entry
 	reserved  int // workers currently minting for an available slot
-	leased    int // tokens held by callers but still occupying capacity
+	leased    int // tokens held by callers (no longer occupying capacity)
 	nextOrder uint64
 	changed   chan struct{} // closed/replaced whenever queue capacity or data changes
 
@@ -235,7 +235,7 @@ func (p *Pool) reserveSlot(genCtx context.Context) bool {
 			p.mu.Unlock()
 			return false
 		}
-		if len(p.tokens)+p.reserved+p.leased < p.size {
+		if len(p.tokens)+p.reserved < p.size {
 			p.reserved++
 			p.mu.Unlock()
 			return true
@@ -395,9 +395,11 @@ func backoffFor(n int) time.Duration {
 	return d
 }
 
-// TakeLease returns a prewarmed token that remains pool capacity until its
-// lease is committed or released. If the pool is stopped (idle watchdog) it is
-// restarted on demand here, so callers never see "closed" between requests.
+// TakeLease returns a prewarmed token. Taking frees pool capacity immediately,
+// so workers start refilling in the background without waiting for Commit or
+// Release (leased tokens no longer occupy capacity). If the pool is stopped
+// (idle watchdog) it is restarted on demand here, so callers never see
+// "closed" between requests.
 func (p *Pool) TakeLease(ctx context.Context) (*TokenLease, error) {
 	for {
 		p.mu.Lock()
@@ -435,6 +437,7 @@ func (p *Pool) TakeLease(ctx context.Context) (*TokenLease, error) {
 			}
 			p.leased++
 			p.lastTake.Store(time.Now().UnixNano())
+			p.notifyLocked()
 			p.mu.Unlock()
 			return &TokenLease{pool: p, entry: e}, nil
 		}
@@ -483,9 +486,11 @@ func (p *Pool) finalizeLease(e entry, release bool) bool {
 	for i < len(p.tokens) && p.tokens[i].order < e.order {
 		i++
 	}
-	p.tokens = append(p.tokens, entry{})
-	copy(p.tokens[i+1:], p.tokens[i:])
-	p.tokens[i] = e
+	if len(p.tokens) < p.size {
+		p.tokens = append(p.tokens, entry{})
+		copy(p.tokens[i+1:], p.tokens[i:])
+		p.tokens[i] = e
+	}
 	p.notifyLocked()
 	return false
 }

@@ -330,7 +330,7 @@ func TestPoolTokenLease_ReleaseRestoresEntry(t *testing.T) {
 	}
 }
 
-func TestPoolTokenLease_CommitAllowsRefill(t *testing.T) {
+func TestPoolTokenLease_TakeAllowsAsyncRefill(t *testing.T) {
 	var calls atomic.Int32
 	secondStarted := make(chan struct{})
 	secondRelease := make(chan struct{})
@@ -366,19 +366,13 @@ func TestPoolTokenLease_CommitAllowsRefill(t *testing.T) {
 	}
 	select {
 	case <-secondStarted:
-		t.Fatal("worker refilled before lease commit")
-	default:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not refill after lease take")
 	}
-
+	close(secondRelease)
 	if !lease.Commit() {
 		t.Fatal("Commit rejected fresh token")
 	}
-	select {
-	case <-secondStarted:
-	case <-time.After(time.Second):
-		t.Fatal("worker did not refill after lease commit")
-	}
-	close(secondRelease)
 }
 
 func TestPoolTokenLease_FinalizeOnce(t *testing.T) {
@@ -525,6 +519,87 @@ func TestPoolTokenLease_ReleaseRestoresEqualTimestampFIFO(t *testing.T) {
 			t.Fatalf("Take=%q want %q (original FIFO order)", got, want)
 		}
 	}
+}
+
+func TestPoolTokenLease_ReleaseDoesNotExceedSize(t *testing.T) {
+	release := make(chan struct{})
+	var solves atomic.Int32
+	p := NewPool(context.Background(), func(ctx context.Context) (string, error) {
+		if solves.Add(1) == 1 {
+			return "tok-1", nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-release:
+			return "tok-2", nil
+		}
+	}, PoolConfig{Size: 1, Workers: 1})
+	defer p.Close()
+
+	lease, err := p.TakeLease(context.Background())
+	if err != nil {
+		t.Fatalf("TakeLease: %v", err)
+	}
+	// The take itself frees capacity, so the worker reserves and starts the
+	// async refill (blocked on `release` until the test closes it).
+	deadline := time.Now().Add(time.Second)
+	for solves.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := solves.Load(); got != 2 {
+		t.Fatalf("solves=%d want 2 (async refill reserved after take)", got)
+	}
+
+	// A released lease must not push ready tokens past the configured size.
+	lease.Release()
+	close(release)
+	deadline = time.Now().Add(time.Second)
+	for p.Ready() < 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := p.Ready(); got > 1 {
+		t.Fatalf("ready=%d want <=1 after release with full buffer", got)
+	}
+}
+
+func TestPoolParallelTakesReserveAsyncRefill(t *testing.T) {
+	var started atomic.Int32
+	p := NewPool(context.Background(), func(ctx context.Context) (string, error) {
+		n := started.Add(1)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+		return fmt.Sprintf("tok-%d", n), nil
+	}, PoolConfig{Size: 2, Workers: 2})
+	defer p.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for started.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	leaseA, err := p.TakeLease(context.Background())
+	if err != nil {
+		t.Fatalf("TakeLease A: %v", err)
+	}
+	leaseB, err := p.TakeLease(context.Background())
+	if err != nil {
+		t.Fatalf("TakeLease B: %v", err)
+	}
+
+	// Both takes free capacity immediately; both workers must start
+	// refilling in the background without waiting for Commit.
+	deadline = time.Now().Add(time.Second)
+	for started.Load() < 4 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := started.Load(); got != 4 {
+		t.Fatalf("extracts started=%d want 4 (two prewarms plus two async refills)", got)
+	}
+	leaseA.Commit()
+	leaseB.Commit()
 }
 
 func TestPoolTokenLease_ReleaseAfterCloseIsDiscarded(t *testing.T) {

@@ -512,7 +512,37 @@ func TestExecutePoolLease_ContextCanceledBeforeDoReturnsToken(t *testing.T) {
 
 func TestExecutePoolLease_ExpiredAfterInflightWaitSendsFreshToken(t *testing.T) {
 	const ttl = 100 * time.Millisecond
-	pool, extracts := newExecutorLeasePoolWithTTL(t, ttl, "tok-1", "tok-2")
+	// Gate the second mint so the async refill (which now starts as soon as
+	// the lease is taken, not when it commits) is deterministic: tok-2 must
+	// stay un-minted until the test releases the gate, and its TTL clock must
+	// not start before then.
+	gateSecondMint := make(chan struct{})
+	var extracts atomic.Int32
+	pool := captcha.NewPool(t.Context(), func(ctx context.Context) (string, error) {
+		i := int(extracts.Add(1))
+		switch i {
+		case 1:
+			return "tok-1", nil
+		case 2:
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-gateSecondMint:
+				return "tok-2", nil
+			}
+		default:
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+	}, captcha.PoolConfig{Size: 1, Workers: 1, TTL: ttl})
+	t.Cleanup(pool.Close)
+	takeCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	prewarmed, err := pool.TakeLease(takeCtx)
+	if err != nil {
+		t.Fatalf("wait for captcha pool: %v", err)
+	}
+	prewarmed.Release()
 	sentTokens := make(chan string, 2)
 	executor := NewExecutor(Options{
 		Pool:         pool,
@@ -554,6 +584,8 @@ func TestExecutePoolLease_ExpiredAfterInflightWaitSendsFreshToken(t *testing.T) 
 	releaseInflight()
 	// Simulate another caller taking and expiring the first token while this
 	// request is still between the in-flight gate and captcha resolution.
+	// The take frees pool capacity and the worker reserves the refill slot,
+	// but tok-2 stays gated until we close the channel below.
 	lease, err := pool.TakeLease(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -567,6 +599,7 @@ func TestExecutePoolLease_ExpiredAfterInflightWaitSendsFreshToken(t *testing.T) 
 		t.Fatal(err)
 	}
 	releaseInflight()
+	close(gateSecondMint)
 	close(resume)
 	if executeErr := receiveTestValue(t, errCh, "fresh token execution result"); executeErr != nil {
 		t.Fatal(executeErr)
@@ -578,8 +611,10 @@ func TestExecutePoolLease_ExpiredAfterInflightWaitSendsFreshToken(t *testing.T) 
 	if got := len(sentTokens); got != 0 {
 		t.Fatalf("additional upstream calls=%d want 0", got)
 	}
-	if got := extracts.Load(); got != 2 {
-		t.Fatalf("successful extracts=%d want 2", got)
+	// A take-triggered refill may or may not have started yet (it stays
+	// blocked for the rest of the test), but exactly two extracts succeed.
+	if got := extracts.Load(); got < 2 {
+		t.Fatalf("extract calls=%d want >=2", got)
 	}
 }
 
