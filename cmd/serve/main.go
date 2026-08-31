@@ -122,7 +122,6 @@ func main() {
 	// Each package keeps its own overall request timeout.
 	hcaptcha.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: transport})
 	hsw.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: transport})
-	hcaptchapow.SetHTTPClient(&http.Client{Timeout: 30 * time.Second, Transport: transport})
 	models.SetHTTPClient(&http.Client{Timeout: 30 * time.Second, Transport: transport})
 	tlsOpts := []tlsclient.HttpClientOption{
 		tlsclient.WithClientProfile(tlsprofiles.Chrome_131),
@@ -228,7 +227,7 @@ func main() {
 				startModelRefresher(ctx, catalog, core, exec, *modelRefresh)
 			}
 			log.Printf("serve %s listening on http://localhost%s (models=%d auth=%d; chat/completions + responses + messages; coalesce=%s max-inflight=%d)",
-				version, *addr, len(modelList), n, execCoalesce(*coalesceMs), *maxInflight)
+				version, *addr, len(modelList), n, time.Duration(*coalesceMs)*time.Millisecond, *maxInflight)
 		},
 	}
 
@@ -281,10 +280,6 @@ func main() {
 	if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Fatal(err)
 	}
-}
-
-func execCoalesce(ms int) time.Duration {
-	return time.Duration(ms) * time.Millisecond
 }
 
 // bypassHostProxy wraps pf so that requests to the given base URL (matched

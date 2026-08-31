@@ -3,6 +3,8 @@
 // (v1 self-contained or v2 wasm-bindgen) needs inside a v8go isolate.
 package hsw
 
+import "strings"
+
 const shimTemplate = `// hsw shim: minimal browser environment for hCaptcha hsw.js inside v8go.
 //
 // hsw.js ships in two families:
@@ -464,24 +466,5 @@ window.outerHeight = outerHeight;
 // export wiring. wasmB64, when present, is the embedded v2 WASM that the
 // fetch mock serves for __wbg_fetch-style calls.
 func buildShim(wasmB64 string) string {
-	return replaceAll(shimTemplate, "__HSW_WASM_B64__", wasmB64)
-}
-
-func replaceAll(s, old, repl string) string {
-	for {
-		i := indexOf(s, old)
-		if i < 0 {
-			return s
-		}
-		s = s[:i] + repl + s[i+len(old):]
-	}
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
+	return strings.ReplaceAll(shimTemplate, "__HSW_WASM_B64__", wasmB64)
 }

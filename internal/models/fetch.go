@@ -135,22 +135,17 @@ func SetTLSClient(c Doer) { tlsClient = c }
 // SetAutoWAF(false) to always fall back to the unfiltered page.
 var autoWAF = true
 
-// mintWAFToken is internal/waftoken.Mint; set in init to avoid an import
-// cycle concerns and to keep the models package free of the solver when
-// unused. It is swapped in by waftoken via RegisterMinter.
+// mintWAFToken is the AWS WAF token solver. The indirection keeps
+// internal/models free of the v8go-dependent internal/waftoken so the
+// package builds and tests on Windows (CI matrix); cmd/serve installs
+// waftoken.Mint at startup via RegisterMinter.
 var mintWAFToken = func(ctx context.Context, targetURL string) (string, error) {
 	return "", fmt.Errorf("models: waftoken solver not registered")
 }
 
 // RegisterMinter installs the automatic AWS WAF token solver (see
-// internal/waftoken). cmd/serve wires it at startup.
+// internal/waftoken). cmd/serve wires it at startup. fn must be non-nil.
 func RegisterMinter(fn func(ctx context.Context, targetURL string) (string, error)) {
-	if fn == nil {
-		mintWAFToken = func(ctx context.Context, targetURL string) (string, error) {
-			return "", fmt.Errorf("models: waftoken solver not registered")
-		}
-		return
-	}
 	mintWAFToken = fn
 }
 

@@ -454,20 +454,6 @@ func (p *Pool) TakeLease(ctx context.Context) (*TokenLease, error) {
 	}
 }
 
-// Take preserves the original consume-on-take API.
-func (p *Pool) Take(ctx context.Context) (string, error) {
-	for {
-		lease, err := p.TakeLease(ctx)
-		if err != nil {
-			return "", err
-		}
-		token := lease.Token()
-		if lease.Commit() {
-			return token, nil
-		}
-	}
-}
-
 func (p *Pool) finalizeLease(e entry, release bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

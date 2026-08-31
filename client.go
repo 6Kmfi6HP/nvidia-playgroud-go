@@ -356,10 +356,3 @@ func parseError(raw []byte) error {
 	}
 	return fmt.Errorf("glm52: http error: %s", string(raw[:min(len(raw), 300)]))
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

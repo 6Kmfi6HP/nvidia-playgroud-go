@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"os"
 	"regexp"
 	"strconv"
@@ -201,41 +200,6 @@ func TestLocationURL(t *testing.T) {
 	}
 }
 
-// TestSolveNStopsAtFingerprint drives SolveN through the offline stages only:
-// a fake challenge fetch feeds ParsePow and BuildFingerprint, then the fake
-// solver loader fails (no network, no V8). The error must carry the solver
-// stage prefix and the fingerprint must already be populated.
-func TestSolveNStopsAtFingerprint(t *testing.T) {
-	oldFetch, oldLoad := fetchChallenge, loadSolver
-	defer func() { fetchChallenge, loadSolver = oldFetch, oldLoad }()
-
-	const loc = "/c/282d0ff"
-	fetchChallenge = func(ctx context.Context, sitekey, host string) (string, string, error) {
-		return fakeJWT(t, loc), loc, nil
-	}
-	loadSolver = func(ctx context.Context, location string) (*hsw.Solver, error) {
-		return nil, errors.New("offline: solver download disabled")
-	}
-
-	res, err := SolveN(context.Background(), "sitekey", "host")
-	if err == nil || !strings.Contains(err.Error(), "load solver") {
-		t.Fatalf("SolveN err = %v, want stage prefix \"load solver\"", err)
-	}
-	if res.JWT == "" || res.Location != loc || res.Fingerprint == "" {
-		t.Errorf("partial results jwt=%q location=%q fpB64=%q", res.JWT, res.Location, res.Fingerprint)
-	}
-	if res.N != "" {
-		t.Errorf("n = %q, want empty (solve stage never reached)", res.N)
-	}
-	_, doc := decodeFingerprint(t, res.Fingerprint)
-	if doc.ProofSpec.Data != testPowData {
-		t.Errorf("fingerprint data = %q, want %q", doc.ProofSpec.Data, testPowData)
-	}
-	if res.Elapsed <= 0 {
-		t.Errorf("elapsed = %v, want > 0", res.Elapsed)
-	}
-}
-
 // fakeV1Body is a miniature hsw v1 bundle: window.hsw(jwt, fpB64) resolves
 // to "n:<jwt-len>:<fpB64-len>"; crypto modes (vv === 1|0) echo the input
 // bytes unchanged. Exercises the same prepare/wrap/dispatch path as the real
@@ -249,17 +213,19 @@ const fakeV1Body = `window.hsw = function(vv, aSj) {
   return Promise.resolve("n:" + String(vv).length + ":" + String(aSj).length);
 };`
 
-// TestSolveNWithFakeSolver runs the full pipeline offline with a stubbed
-// solver and verifies the solver cache: two solves for the same bundle
-// location reuse the cached solver (loader called once).
-func TestSolveNWithFakeSolver(t *testing.T) {
-	oldFetch, oldLoad := fetchChallenge, loadSolver
-	defer func() { fetchChallenge, loadSolver = oldFetch, oldLoad }()
-	defer CloseSolvers()
+// TestSolverCacheReusesSolver runs the full offline solve pipeline through
+// the production CaptchaToken path and verifies the solver cache: two solves
+// for the same bundle location reuse the cached solver (loader called once).
+func TestSolverCacheReusesSolver(t *testing.T) {
+	oldFetch, oldLoad, oldPost, oldOctet := fetchChecksite, loadSolver, postGetCaptcha, postGetCaptchaOctetFn
+	defer func() {
+		fetchChecksite, loadSolver, postGetCaptcha, postGetCaptchaOctetFn = oldFetch, oldLoad, oldPost, oldOctet
+		CloseSolvers()
+	}()
 
 	const loc = "/c/282d0ff"
-	fetchChallenge = func(ctx context.Context, sitekey, host string) (string, string, error) {
-		return fakeJWT(t, loc), loc, nil
+	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, error) {
+		return fakeJWT(t, loc), loc, "key", nil
 	}
 	loads := 0
 	loadSolver = func(ctx context.Context, location string) (*hsw.Solver, error) {
@@ -270,42 +236,41 @@ func TestSolveNWithFakeSolver(t *testing.T) {
 		}
 		return hsw.New(b)
 	}
+	const tok = "P1_offline.cache-test"
+	postGetCaptcha = func(ctx context.Context, params map[string]string) (int, []byte, error) {
+		return 200, []byte(`{"generated_pass_UUID":"` + tok + `"}`), nil
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	res, err := SolveN(ctx, "sitekey", "host")
+	got1, err := CaptchaToken(ctx, "sitekey", "host")
 	if err != nil {
-		t.Fatalf("SolveN #1: %v", err)
+		t.Fatalf("CaptchaToken #1: %v", err)
 	}
-	want := "n:" + strconv.Itoa(len(res.JWT)) + ":" + strconv.Itoa(len(res.Fingerprint))
-	if res.N != want {
-		t.Fatalf("SolveN #1 n = %q, want %q", res.N, want)
-	}
-	if res.Location != loc {
-		t.Errorf("location = %q, want %q", res.Location, loc)
+	if got1 != tok {
+		t.Fatalf("CaptchaToken #1 = %q, want %q", got1, tok)
 	}
 	if loads != 1 {
 		t.Fatalf("solver loads after #1 = %d, want 1", loads)
 	}
 
-	if res2, err := SolveN(ctx, "sitekey", "host"); err != nil {
-		t.Fatalf("SolveN #2: %v", err)
-	} else if want2 := "n:" + strconv.Itoa(len(res2.JWT)) + ":" + strconv.Itoa(len(res2.Fingerprint)); res2.N != want2 {
-		// fpB64 length varies between solves: the mined stamp's counter hex
-		// width depends on the random salt, so compare against run #2's own
-		// expected value instead of run #1's.
-		t.Errorf("SolveN #2 n = %q, want %q", res2.N, want2)
+	got2, err := CaptchaToken(ctx, "sitekey", "host")
+	if err != nil {
+		t.Fatalf("CaptchaToken #2: %v", err)
+	}
+	if got2 != tok {
+		t.Errorf("CaptchaToken #2 = %q, want %q", got2, tok)
 	}
 	if loads != 1 {
 		t.Errorf("solver loads after #2 = %d, want 1 (cache miss)", loads)
 	}
 }
 
-// TestLive runs the real pipeline against hCaptcha for build.nvidia.com:
-// checksiteconfig -> fingerprint -> hsw solve. Disabled by default; enable
+// TestLiveCaptchaToken runs the real production path against hCaptcha for
+// build.nvidia.com through CaptchaTokenDetail. Disabled by default; enable
 // with HSW_LIVE=1 when network is available.
-func TestLive(t *testing.T) {
+func TestLiveCaptchaToken(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short mode")
 	}
@@ -320,23 +285,14 @@ func TestLive(t *testing.T) {
 		sitekey = "0c6a1e45-75d7-43cc-b836-a0c9d886b8ee"
 		host    = "build.nvidia.com"
 	)
-	res, err := SolveN(ctx, sitekey, host)
-	t.Logf("jwt_len=%d location=%q fpB64_len=%d n_len=%d n_prefix=%q elapsed=%s err=%v",
-		len(res.JWT), res.Location, len(res.Fingerprint), len(res.N), clip(res.N, 60), res.Elapsed, err)
+	token, solve, err := CaptchaTokenDetail(ctx, sitekey, host)
+	t.Logf("token_len=%d jwt_len=%d location=%q fpB64_len=%d elapsed=%s err=%v",
+		len(token), len(solve.JWT), solve.Location, len(solve.Fingerprint), solve.Elapsed, err)
 	if err != nil {
-		t.Fatalf("SolveN: %v", err)
+		t.Fatalf("CaptchaTokenDetail: %v", err)
 	}
-	if res.JWT == "" || res.Fingerprint == "" || res.Location == "" {
-		t.Fatalf("incomplete solve results: jwt=%d fpB64=%d location=%q", len(res.JWT), len(res.Fingerprint), res.Location)
+	if token == "" || solve.JWT == "" || solve.Fingerprint == "" || solve.Location == "" {
+		t.Fatalf("incomplete solve results: token=%d jwt=%d fpB64=%d location=%q",
+			len(token), len(solve.JWT), len(solve.Fingerprint), solve.Location)
 	}
-	if len(res.N) < 100 {
-		t.Errorf("n suspiciously short: %d", len(res.N))
-	}
-}
-
-func clip(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }

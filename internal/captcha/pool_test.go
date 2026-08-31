@@ -30,10 +30,12 @@ func TestPoolTakeBlocksUntilFilled(t *testing.T) {
 	takeCtx, takeCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer takeCancel()
 
-	tok, err := p.Take(takeCtx)
+	lease, err := p.TakeLease(takeCtx)
 	if err != nil {
-		t.Fatalf("Take: %v", err)
+		t.Fatalf("TakeLease: %v", err)
 	}
+	tok := lease.Token()
+	lease.Commit()
 	if tok == "" {
 		t.Fatal("empty token")
 	}
@@ -78,10 +80,12 @@ func TestPoolDiscardsExpired(t *testing.T) {
 
 	takeCtx, takeCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer takeCancel()
-	tok, err := p.Take(takeCtx)
+	lease, err := p.TakeLease(takeCtx)
 	if err != nil {
-		t.Fatalf("Take: %v", err)
+		t.Fatalf("TakeLease: %v", err)
 	}
+	tok := lease.Token()
+	lease.Commit()
 	if tok == "" {
 		t.Fatal("empty token")
 	}
@@ -102,7 +106,7 @@ func TestPoolClosed(t *testing.T) {
 	p.Close()
 	cancel()
 
-	_, err := p.Take(context.Background())
+	_, err := p.TakeLease(context.Background())
 	if err == nil {
 		t.Fatal("expected error after Close")
 	}
@@ -231,7 +235,9 @@ func TestPoolTakeWakesImmediatelyOnFill(t *testing.T) {
 	done := make(chan time.Duration, 1)
 	go func() {
 		start := time.Now()
-		_, _ = p.Take(context.Background())
+		if l, lerr := p.TakeLease(context.Background()); lerr == nil {
+			l.Commit()
+		}
 		done <- time.Since(start)
 	}()
 	time.Sleep(20 * time.Millisecond)
@@ -258,7 +264,7 @@ func TestPoolTakeCanceledDoesNotConsumeReadyToken(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := p.Take(ctx); err == nil {
+	if _, err := p.TakeLease(ctx); err == nil {
 		t.Fatal("Take with canceled context succeeded")
 	}
 	if got := p.Ready(); got != 1 {
@@ -275,7 +281,7 @@ func TestPoolTakeAfterCloseDoesNotConsumeReadyToken(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	p.Close()
-	if _, err := p.Take(context.Background()); err == nil {
+	if _, err := p.TakeLease(context.Background()); err == nil {
 		t.Fatal("Take after Close succeeded")
 	}
 	if got := p.Ready(); got != 1 {
@@ -309,10 +315,12 @@ func TestPoolTokenLease_ReleaseRestoresEntry(t *testing.T) {
 		t.Fatalf("takes=%d want 0 after release", takes)
 	}
 
-	token, err := p.Take(context.Background())
+	lease2, err := p.TakeLease(context.Background())
 	if err != nil {
-		t.Fatalf("Take: %v", err)
+		t.Fatalf("TakeLease: %v", err)
 	}
+	token := lease2.Token()
+	lease2.Commit()
 	if token != "oldest" {
 		t.Fatalf("Take=%q want oldest (original FIFO order)", token)
 	}
@@ -507,10 +515,12 @@ func TestPoolTokenLease_ReleaseRestoresEqualTimestampFIFO(t *testing.T) {
 	first.Release()
 
 	for _, want := range []string{"first", "second"} {
-		got, takeErr := p.Take(context.Background())
+		lease, takeErr := p.TakeLease(context.Background())
 		if takeErr != nil {
-			t.Fatalf("Take: %v", takeErr)
+			t.Fatalf("TakeLease: %v", takeErr)
 		}
+		got := lease.Token()
+		lease.Commit()
 		if got != want {
 			t.Fatalf("Take=%q want %q (original FIFO order)", got, want)
 		}

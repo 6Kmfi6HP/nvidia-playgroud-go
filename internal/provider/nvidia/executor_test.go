@@ -85,10 +85,12 @@ func requireReturnedPoolToken(t *testing.T, pool *captcha.Pool, extracts *atomic
 	}
 	takeCtx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	got, err := pool.Take(takeCtx)
+	lease, err := pool.TakeLease(takeCtx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := lease.Token()
+	lease.Commit()
 	if got != "tok-1" {
 		t.Fatalf("returned token=%q want tok-1", got)
 	}
@@ -551,10 +553,12 @@ func TestExecutePoolLease_TransportErrorCommitsToken(t *testing.T) {
 	}
 	takeCtx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	token, err := pool.Take(takeCtx)
+	lease, err := pool.TakeLease(takeCtx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	token := lease.Token()
+	lease.Commit()
 	if token != "tok-2" {
 		t.Fatalf("next token=%q want tok-2", token)
 	}
