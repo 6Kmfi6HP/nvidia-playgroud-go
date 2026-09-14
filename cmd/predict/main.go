@@ -41,6 +41,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"sort"
@@ -336,6 +337,7 @@ func sendOnce(ctx context.Context, c *config, info models.ModelInfo, model, toke
 		nvidia.WithModelInfo(info),
 		nvidia.WithModel(model),
 		nvidia.WithDefaults(c.maxTokens, c.seed, c.temp, c.topP),
+		nvidia.WithHTTPClient(&http.Client{Timeout: c.timeout}),
 	}
 	switch c.thinking {
 	case "on":
