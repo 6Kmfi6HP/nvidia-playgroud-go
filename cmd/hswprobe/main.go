@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"glm52-nvidia/internal/hcaptchapow"
-	"glm52-nvidia/internal/hsw"
+	"nvidia-playgroud-go/internal/hcaptchapow"
+	"nvidia-playgroud-go/internal/hsw"
 )
 
 // defaultFingerprint returns a minimal fingerprint payload, base64-encoded,

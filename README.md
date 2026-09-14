@@ -160,11 +160,11 @@ data: [DONE]
 
 ### 安装
 
-本仓库 Go module 名为 `glm52-nvidia`（非标准域名路径），源码库内直接导入即可：
+本仓库 Go module 名为 `nvidia-playgroud-go`（非标准域名路径），源码库内直接导入即可：
 
 ```go
-import glm52 "glm52-nvidia"   // 客户端
-import "glm52-nvidia/internal/captcha"   // PoW 提取 / token 池
+import nvidia "nvidia-playgroud-go"   // 客户端
+import "nvidia-playgroud-go/internal/captcha"   // PoW 提取 / token 池
 ```
 
 ### 方式 1：Captcha Token 模式（逆向）
@@ -178,11 +178,11 @@ go run ./cmd/example -captcha "P1_eyJ..."
 或在代码中：
 
 ```go
-client := glm52.New(glm52.WithCaptchaToken("P1_eyJ..."))   // 默认模型 moonshotai/kimi-k3
+client := nvidia.New(nvidia.WithCaptchaToken("P1_eyJ..."))   // 默认模型 moonshotai/kimi-k3
 resp, err := client.Chat(ctx, messages)
 
 // 指定其他注册表模型：
-client = glm52.New(glm52.WithCaptchaToken("P1_eyJ..."), glm52.WithModel("deepseek-ai/deepseek-v4-pro-0813"))
+client = nvidia.New(nvidia.WithCaptchaToken("P1_eyJ..."), nvidia.WithModel("deepseek-ai/deepseek-v4-pro-0813"))
 // 客户端默认只在模型声明支持 Thinking 时注入 chat_template_kwargs
 ```
 
@@ -217,12 +217,12 @@ go run ./cmd/predict -curl -slug kimi-k3 -function-id <uuid> -captcha "P1_..."  
 go run ./cmd/predict -n 2 -stream=false -max-tokens 16          # 连发两次，每次现解一个一次性 token
 ```
 
-`cmd/predict` 走的是仓库客户端（`glm52.WithModelInfo` 绕过注册表），请求头与 `serve` 完全一致；`-captcha` 固定 token 时只允许 `-n 1`（token 单次有效）。
+`cmd/predict` 走的是仓库客户端（`nvidia.WithModelInfo` 绕过注册表），请求头与 `serve` 完全一致；`-captcha` 固定 token 时只允许 `-n 1`（token 单次有效）。
 
 在代码中使用：
 
 ```go
-import "glm52-nvidia/internal/captcha"
+import "nvidia-playgroud-go/internal/captcha"
 token, err := captcha.PowExtract()(ctx) // = hcaptcha.CaptchaToken(ctx, captcha.PlaygroundSitekey, captcha.PlaygroundHost)
 ```
 

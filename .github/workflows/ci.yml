@@ -54,7 +54,7 @@ jobs:
       # linux/macos legs of this matrix.
       - name: Run tests (Windows core)
         if: runner.os == 'Windows'
-        run: go test -race -vet=all ./ glm52-nvidia/internal/hcaptchapow glm52-nvidia/internal/models
+        run: go test -race -vet=all ./ nvidia-playgroud-go/internal/hcaptchapow nvidia-playgroud-go/internal/models
         env:
           SKIP_INTEGRATION_TESTS: "1"
 

@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	glm52 "glm52-nvidia"
-	"glm52-nvidia/internal/captcha"
-	"glm52-nvidia/internal/models"
+	nv "nvidia-playgroud-go"
+	"nvidia-playgroud-go/internal/captcha"
+	"nvidia-playgroud-go/internal/models"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	clipexec "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
@@ -592,7 +592,7 @@ func isRetryableCaptchaFailure(status int, raw []byte) bool {
 	if len(raw) == 0 {
 		return false
 	}
-	var er glm52.ErrorResponse
+	var er nv.ErrorResponse
 	if json.Unmarshal(raw, &er) == nil {
 		desc := strings.ToLower(er.RequestStatus.StatusDescription)
 		if strings.Contains(desc, "token is invalid") || strings.Contains(desc, "invalid token") {

@@ -20,9 +20,9 @@ import (
 	"syscall"
 	"time"
 
-	"glm52-nvidia/internal/hcaptcha"
-	"glm52-nvidia/internal/hcaptchapow"
-	"glm52-nvidia/internal/hsw"
+	"nvidia-playgroud-go/internal/hcaptcha"
+	"nvidia-playgroud-go/internal/hcaptchapow"
+	"nvidia-playgroud-go/internal/hsw"
 )
 
 func main() {

@@ -48,11 +48,11 @@ import (
 	"strings"
 	"time"
 
-	glm52 "glm52-nvidia"
-	"glm52-nvidia/internal/captcha"
-	"glm52-nvidia/internal/hcaptcha"
-	"glm52-nvidia/internal/hcaptchapow"
-	"glm52-nvidia/internal/models"
+	nvidia "nvidia-playgroud-go"
+	"nvidia-playgroud-go/internal/captcha"
+	"nvidia-playgroud-go/internal/hcaptcha"
+	"nvidia-playgroud-go/internal/hcaptchapow"
+	"nvidia-playgroud-go/internal/models"
 )
 
 func main() {
@@ -272,13 +272,13 @@ func resolveTarget(c *config) (models.ModelInfo, string, error) {
 
 // buildMessages assembles the chat messages from -messages (JSON array, inline
 // or @file) or from -system/-prompt.
-func buildMessages(c *config) ([]glm52.Message, error) {
+func buildMessages(c *config) ([]nvidia.Message, error) {
 	if c.messages != "" {
 		raw, err := readArg(c.messages)
 		if err != nil {
 			return nil, err
 		}
-		var msgs []glm52.Message
+		var msgs []nvidia.Message
 		if err := json.Unmarshal(raw, &msgs); err != nil {
 			return nil, fmt.Errorf("-messages: %w", err)
 		}
@@ -288,11 +288,11 @@ func buildMessages(c *config) ([]glm52.Message, error) {
 		return msgs, nil
 	}
 
-	msgs := make([]glm52.Message, 0, 2)
+	msgs := make([]nvidia.Message, 0, 2)
 	if c.system != "" {
-		msgs = append(msgs, glm52.Message{Role: glm52.RoleSystem, Content: c.system})
+		msgs = append(msgs, nvidia.Message{Role: nvidia.RoleSystem, Content: c.system})
 	}
-	msgs = append(msgs, glm52.Message{Role: glm52.RoleUser, Content: c.prompt})
+	msgs = append(msgs, nvidia.Message{Role: nvidia.RoleUser, Content: c.prompt})
 	return msgs, nil
 }
 
@@ -309,8 +309,8 @@ func readArg(s string) ([]byte, error) {
 }
 
 // requestBody mirrors what the client sends, for -curl output only.
-func (c *config) requestBody(model string, msgs []glm52.Message) ([]byte, error) {
-	req := glm52.ChatRequest{
+func (c *config) requestBody(model string, msgs []nvidia.Message) ([]byte, error) {
+	req := nvidia.ChatRequest{
 		Model:       model,
 		Messages:    msgs,
 		Temperature: c.temp,
@@ -323,30 +323,30 @@ func (c *config) requestBody(model string, msgs []glm52.Message) ([]byte, error)
 		req.ChatTemplateKwargs = map[string]any{"enable_thinking": true, "clear_thinking": false}
 	}
 	if c.stream {
-		req.StreamOptions = &glm52.StreamOptions{IncludeUsage: true}
+		req.StreamOptions = &nvidia.StreamOptions{IncludeUsage: true}
 	}
 	return json.Marshal(req)
 }
 
 // sendOnce performs one predict call through the repo client, with the
 // invocation triple pinned via WithModelInfo so the registry is bypassed.
-func sendOnce(ctx context.Context, c *config, info models.ModelInfo, model, token string, msgs []glm52.Message) error {
-	opts := []glm52.Option{
-		glm52.WithCaptchaToken(token),
-		glm52.WithModelInfo(info),
-		glm52.WithModel(model),
-		glm52.WithDefaults(c.maxTokens, c.seed, c.temp, c.topP),
+func sendOnce(ctx context.Context, c *config, info models.ModelInfo, model, token string, msgs []nvidia.Message) error {
+	opts := []nvidia.Option{
+		nvidia.WithCaptchaToken(token),
+		nvidia.WithModelInfo(info),
+		nvidia.WithModel(model),
+		nvidia.WithDefaults(c.maxTokens, c.seed, c.temp, c.topP),
 	}
 	switch c.thinking {
 	case "on":
-		opts = append(opts, glm52.WithThinking(true))
+		opts = append(opts, nvidia.WithThinking(true))
 	case "off":
-		opts = append(opts, glm52.WithThinking(false))
+		opts = append(opts, nvidia.WithThinking(false))
 	case "auto":
 	default:
 		return fmt.Errorf("-thinking must be auto|on|off, got %q", c.thinking)
 	}
-	client := glm52.New(opts...)
+	client := nvidia.New(opts...)
 
 	start := time.Now()
 	if !c.stream {
@@ -370,9 +370,9 @@ func sendOnce(ctx context.Context, c *config, info models.ModelInfo, model, toke
 
 	var (
 		streamErr error
-		usage     *glm52.Usage
+		usage     *nvidia.Usage
 	)
-	err := client.StreamChat(ctx, msgs, func(ch glm52.StreamChunk) {
+	err := client.StreamChat(ctx, msgs, func(ch nvidia.StreamChunk) {
 		if ch.Error != nil {
 			if streamErr == nil {
 				streamErr = ch.Error

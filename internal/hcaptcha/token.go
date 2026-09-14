@@ -7,7 +7,7 @@ import (
 	"context"
 	"sync"
 
-	"glm52-nvidia/internal/hsw"
+	"nvidia-playgroud-go/internal/hsw"
 )
 
 // loadSolver is a package-level indirection over the hsw network entry

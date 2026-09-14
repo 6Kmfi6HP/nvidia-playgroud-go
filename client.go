@@ -1,4 +1,4 @@
-package glm52
+package nvidia
 
 import (
 	"bufio"
@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"glm52-nvidia/internal/models"
+	"nvidia-playgroud-go/internal/models"
 )
 
 // --- Client ---
@@ -108,7 +108,7 @@ func (c *Client) buildRequest(ctx context.Context, req *ChatRequest) (*http.Requ
 	}
 	info, canonical, err := c.modelInfo(model)
 	if err != nil {
-		return nil, fmt.Errorf("glm52: %w", err)
+		return nil, fmt.Errorf("nvidia: %w", err)
 	}
 	// A "<function-id>@<model>" pin selects the NVCF function; the body keeps
 	// the plain registry model id NVIDIA expects to see.
@@ -118,12 +118,12 @@ func (c *Client) buildRequest(ctx context.Context, req *ChatRequest) (*http.Requ
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("glm52: marshal request: %w", err)
+		return nil, fmt.Errorf("nvidia: marshal request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", info.PredictEndpoint(), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("glm52: create request: %w", err)
+		return nil, fmt.Errorf("nvidia: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("accept", "text/event-stream")
@@ -251,14 +251,14 @@ func (c *Client) doRequest(ctx context.Context, req *ChatRequest, target interfa
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("glm52: http do: %w", err)
+		return fmt.Errorf("nvidia: http do: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Read full body
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("glm52: read body: %w", err)
+		return fmt.Errorf("nvidia: read body: %w", err)
 	}
 
 	if resp.StatusCode >= 400 {
@@ -266,7 +266,7 @@ func (c *Client) doRequest(ctx context.Context, req *ChatRequest, target interfa
 	}
 
 	if err := json.Unmarshal(raw, target); err != nil {
-		return fmt.Errorf("glm52: decode response: %w", err)
+		return fmt.Errorf("nvidia: decode response: %w", err)
 	}
 	return nil
 }
@@ -281,7 +281,7 @@ func (c *Client) doStream(ctx context.Context, req *ChatRequest, cb func(StreamC
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("glm52: http do: %w", err)
+		return fmt.Errorf("nvidia: http do: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -299,7 +299,7 @@ func (c *Client) doStream(ctx context.Context, req *ChatRequest, cb func(StreamC
 				cb(StreamChunk{Done: true})
 				return nil
 			}
-			return fmt.Errorf("glm52: read sse: %w", err)
+			return fmt.Errorf("nvidia: read sse: %w", err)
 		}
 
 		line = strings.TrimSpace(line)
@@ -320,7 +320,7 @@ func (c *Client) doStream(ctx context.Context, req *ChatRequest, cb func(StreamC
 			data := strings.TrimPrefix(line, "data: ")
 			var chunk ChatChunk
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				cb(StreamChunk{Error: fmt.Errorf("glm52: decode chunk: %w", err)})
+				cb(StreamChunk{Error: fmt.Errorf("nvidia: decode chunk: %w", err)})
 				continue
 			}
 
@@ -352,7 +352,7 @@ func parseError(raw []byte) error {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &oaiErr); err == nil && oaiErr.Error.Message != "" {
-		return fmt.Errorf("glm52: %s: %s", oaiErr.Error.Type, oaiErr.Error.Message)
+		return fmt.Errorf("nvidia: %s: %s", oaiErr.Error.Type, oaiErr.Error.Message)
 	}
-	return fmt.Errorf("glm52: http error: %s", string(raw[:min(len(raw), 300)]))
+	return fmt.Errorf("nvidia: http error: %s", string(raw[:min(len(raw), 300)]))
 }

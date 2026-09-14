@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"glm52-nvidia/internal/models"
+	"nvidia-playgroud-go/internal/models"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )

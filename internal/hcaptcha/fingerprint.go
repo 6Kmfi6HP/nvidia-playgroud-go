@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"glm52-nvidia/internal/hcaptchapow"
+	"nvidia-playgroud-go/internal/hcaptchapow"
 )
 
 // AssetBase is where hCaptcha serves challenge assets and hsw.js bundles; the

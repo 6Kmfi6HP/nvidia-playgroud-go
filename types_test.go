@@ -1,4 +1,4 @@
-package glm52
+package nvidia
 
 import (
 	"encoding/json"

@@ -1,4 +1,4 @@
-module glm52-nvidia
+module nvidia-playgroud-go
 
 go 1.26.0
 

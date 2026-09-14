@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"glm52-nvidia/internal/provider/nvidia"
+	"nvidia-playgroud-go/internal/provider/nvidia"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"

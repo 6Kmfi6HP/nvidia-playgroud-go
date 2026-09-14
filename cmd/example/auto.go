@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"glm52-nvidia/internal/captcha"
+	"nvidia-playgroud-go/internal/captcha"
 )
 
 // extractCaptchaToken mints a fresh one-shot token with the pure-Go

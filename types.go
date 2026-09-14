@@ -1,4 +1,4 @@
-// Package glm52 provides a Go client for NVIDIA Build Playground's anonymous
+// Package nvidia provides a Go client for NVIDIA Build Playground's anonymous
 // predict API. It is multi-model: requests are routed by model id through the
 // registry in internal/models (default: moonshotai/kimi-k3; z-ai/glm-5.2 was
 // removed upstream in 2026-08). Auth is a one-shot P1_ hCaptcha token — minted
@@ -6,7 +6,7 @@
 //
 // Usage:
 //
-//	client := glm52.New(glm52.WithCaptchaToken("P1_...")) // default model: moonshotai/kimi-k3
+//	client := nvidia.New(nvidia.WithCaptchaToken("P1_...")) // default model: moonshotai/kimi-k3
 //
 //	// Simple chat
 //	resp, _ := client.Chat(ctx, []Message{{Role: "user", Content: "Hi"}})
@@ -15,7 +15,7 @@
 //	// Streaming chat
 //	client.StreamChat(ctx, []Message{{Role: "user", Content: "Hi"}},
 //	    func(chunk ChatChunk) { fmt.Print(chunk.Content) })
-package glm52
+package nvidia
 
 import (
 	"fmt"

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"glm52-nvidia/internal/hcaptchapow"
-	"glm52-nvidia/internal/hsw"
+	"nvidia-playgroud-go/internal/hcaptchapow"
+	"nvidia-playgroud-go/internal/hsw"
 )
 
 // testPowData is a fixed base64 resource (hCaptcha PoW "d" claims are always

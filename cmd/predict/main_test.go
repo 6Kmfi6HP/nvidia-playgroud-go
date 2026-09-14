@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"glm52-nvidia/internal/models"
+	"nvidia-playgroud-go/internal/models"
 )
 
 func TestResolveTarget(t *testing.T) {

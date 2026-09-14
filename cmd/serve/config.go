@@ -24,7 +24,7 @@ func buildConfig(addr string) (cfg *config.Config, cfgPath string, err error) {
 		return nil, "", err
 	}
 
-	authDir, err := os.MkdirTemp("", "glm52-nvidia-auth-*")
+	authDir, err := os.MkdirTemp("", "nvidia-playgroud-go-auth-*")
 	if err != nil {
 		return nil, "", fmt.Errorf("auth dir: %w", err)
 	}

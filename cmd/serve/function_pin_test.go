@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"glm52-nvidia/internal/models"
+	"nvidia-playgroud-go/internal/models"
 
 	"github.com/gin-gonic/gin"
 )

@@ -2,10 +2,10 @@
 # TTFT sweep: start serve with a config, wait for captcha pool, run N proxied requests.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SERVE="${SERVE:-/tmp/glm52-serve}"
-BENCH="${BENCH:-/tmp/glm52-streambench}"
+SERVE="${SERVE:-/tmp/nvidia-serve}"
+BENCH="${BENCH:-/tmp/nvidia-streambench}"
 PORT="${PORT:-19080}"
-RESULTS="${RESULTS:-/tmp/glm52-ttft-results.tsv}"
+RESULTS="${RESULTS:-/tmp/nvidia-ttft-results.tsv}"
 RUNS="${RUNS:-2}"
 
 cd "$ROOT"
@@ -35,7 +35,7 @@ wait_pool() {
 
 run_config() {
   local name="$1"; shift
-  local log="/tmp/glm52-serve-${name}.log"
+  local log="/tmp/nvidia-serve-${name}.log"
   echo "=== config=$name args=$* ===" >&2
 
   lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true

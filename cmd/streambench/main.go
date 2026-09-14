@@ -25,9 +25,9 @@ import (
 	"sync"
 	"time"
 
-	glm52 "glm52-nvidia"
-	"glm52-nvidia/internal/captcha"
-	"glm52-nvidia/internal/models"
+	nvidia "nvidia-playgroud-go"
+	"nvidia-playgroud-go/internal/captcha"
+	"nvidia-playgroud-go/internal/models"
 )
 
 func main() {
@@ -60,7 +60,7 @@ func main() {
 	}
 
 	body, err := json.Marshal(map[string]any{
-		"model":       glm52.DefaultModel,
+		"model":       nvidia.DefaultModel,
 		"messages":    []map[string]string{{"role": "user", "content": *prompt}},
 		"temperature": 0.2,
 		"top_p":       1.0,
@@ -216,21 +216,21 @@ func doStream(ctx context.Context, endpoint, functionID string, body []byte, tok
 }
 
 type chunkEvent struct {
-	At          time.Time
-	Gap         time.Duration
-	Bytes       int
-	ContentLen  int
-	HasUsage    bool
+	At           time.Time
+	Gap          time.Duration
+	Bytes        int
+	ContentLen   int
+	HasUsage     bool
 	FinishReason string
-	RawPreview  string
+	RawPreview   string
 }
 
 type streamStats struct {
-	TTFB       time.Duration
-	Total      time.Duration
-	Events     []chunkEvent
-	Content    strings.Builder
-	DoneSeen   bool
+	TTFB     time.Duration
+	Total    time.Duration
+	Events   []chunkEvent
+	Content  strings.Builder
+	DoneSeen bool
 }
 
 func collectSSE(body io.Reader, start, headerAt time.Time) streamStats {

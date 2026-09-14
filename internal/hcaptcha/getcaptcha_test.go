@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"glm52-nvidia/internal/hsw"
+	"nvidia-playgroud-go/internal/hsw"
 )
 
 func TestFindP1Token(t *testing.T) {

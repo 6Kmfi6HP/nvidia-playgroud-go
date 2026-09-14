@@ -33,7 +33,7 @@ import (
 	"net/http"
 	"strings"
 
-	"glm52-nvidia/internal/models"
+	"nvidia-playgroud-go/internal/models"
 
 	"github.com/gin-gonic/gin"
 	sdkginhandlers "github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"

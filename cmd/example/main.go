@@ -1,4 +1,4 @@
-// cmd/example/main.go — Example usage of the glm52 Go client.
+// cmd/example/main.go — Example usage of the nvidia Go client.
 //
 // Usage:
 //
@@ -18,7 +18,7 @@ import (
 	"os/signal"
 	"time"
 
-	glm52 "glm52-nvidia"
+	nvidia "nvidia-playgroud-go"
 )
 
 func main() {
@@ -52,14 +52,14 @@ func main() {
 		log.Fatal("Specify -captcha or -auto")
 	}
 
-	opts := []glm52.Option{glm52.WithCaptchaToken(token)}
+	opts := []nvidia.Option{nvidia.WithCaptchaToken(token)}
 	if *model != "" {
-		opts = append(opts, glm52.WithModel(*model))
+		opts = append(opts, nvidia.WithModel(*model))
 	}
-	client := glm52.New(opts...)
+	client := nvidia.New(opts...)
 
 	// --- Send request ---
-	messages := []glm52.Message{
+	messages := []nvidia.Message{
 		{Role: "system", Content: "You are a helpful assistant."},
 		{Role: "user", Content: *prompt},
 	}
@@ -67,9 +67,9 @@ func main() {
 	if *stream {
 		fmt.Print("\n=== Streaming response ===\n\n")
 		smooth := time.Duration(*smoothMs) * time.Millisecond
-		var lastUsage *glm52.Usage
+		var lastUsage *nvidia.Usage
 		var reasoningStarted, contentStarted bool
-		err := client.StreamChat(ctx, messages, func(chunk glm52.StreamChunk) {
+		err := client.StreamChat(ctx, messages, func(chunk nvidia.StreamChunk) {
 			if chunk.Error != nil {
 				log.Printf("Stream error: %v", chunk.Error)
 				return

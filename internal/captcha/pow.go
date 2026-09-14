@@ -10,7 +10,7 @@ package captcha
 import (
 	"context"
 
-	"glm52-nvidia/internal/hcaptcha"
+	"nvidia-playgroud-go/internal/hcaptcha"
 )
 
 const (

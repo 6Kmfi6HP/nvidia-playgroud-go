@@ -19,8 +19,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	glm52 "glm52-nvidia"
-	"glm52-nvidia/internal/hcaptcha"
+	nvidia "nvidia-playgroud-go"
+	"nvidia-playgroud-go/internal/hcaptcha"
 )
 
 // defaultSitekey and defaultHost are the build.nvidia.com playground widget
@@ -112,14 +112,14 @@ func run() error {
 // Upstream acceptance is informational: a rejection here does not invalidate
 // the token's own lifecycle.
 func verifyUpstream(ctx context.Context, token string) {
-	client := glm52.New(
-		glm52.WithCaptchaToken(token),
-		glm52.WithThinking(false),
-		glm52.WithDefaults(8, 42, 1.0, 1.0),
+	client := nvidia.New(
+		nvidia.WithCaptchaToken(token),
+		nvidia.WithThinking(false),
+		nvidia.WithDefaults(8, 42, 1.0, 1.0),
 	)
 	apiCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	resp, err := client.Chat(apiCtx, []glm52.Message{{Role: "user", Content: "ping"}})
+	resp, err := client.Chat(apiCtx, []nvidia.Message{{Role: "user", Content: "ping"}})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "upstream verify failed: %v\n", err)
 		return

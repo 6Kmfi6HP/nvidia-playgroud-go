@@ -10,8 +10,8 @@ import (
 	"log"
 	"time"
 
-	"glm52-nvidia/internal/models"
-	"glm52-nvidia/internal/provider/nvidia"
+	"nvidia-playgroud-go/internal/models"
+	"nvidia-playgroud-go/internal/provider/nvidia"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
