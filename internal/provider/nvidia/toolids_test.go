@@ -238,7 +238,7 @@ func TestDecodeClaudeToolCallIDs(t *testing.T) {
 
 	// Native ids pass through unchanged.
 	native := []byte(`{"model":"m","messages":[{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"f","input":{}}]}]}`)
-	if got := DecodeClaudeToolCallIDs(native); string(got) != string(native) {
+	if got := DecodeClaudeToolCallIDs(native); !bytes.Equal(got, native) {
 		t.Fatalf("native ids modified: %s", got)
 	}
 }

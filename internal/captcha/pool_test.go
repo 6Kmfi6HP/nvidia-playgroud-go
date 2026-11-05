@@ -679,18 +679,19 @@ func TestPoolIdleStopRestart(t *testing.T) {
 		t.Fatalf("solves=%d want 2 (pool must stay stopped after idle shutdown)", solves.Load())
 	}
 
-	// Next take restarts the pool on demand.
+	// Next take restarts the pool on demand. Commit consumes the restarted
+	// token; the take-triggered async refill then mints exactly one more.
 	lease2, err := p.TakeLease(ctx)
 	if err != nil {
 		t.Fatalf("TakeLease after idle: %v", err)
 	}
-	lease2.Release() // keep the token pooled so no extra refill happens
 	if lease2.Token() != "tok" {
 		t.Fatalf("token=%q", lease2.Token())
 	}
+	lease2.Commit()
 	waitFor("refill after restart", 2*time.Second, func() bool { return p.Ready() == 1 })
-	if got := solves.Load(); got != 3 {
-		t.Fatalf("solves=%d want 3 (restart mints exactly the refill for this take)", got)
+	if got := solves.Load(); got != 4 {
+		t.Fatalf("solves=%d want 4 (restart plus take-triggered refill)", got)
 	}
 }
 

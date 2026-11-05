@@ -48,13 +48,16 @@ func newExecutorLeasePoolWithTTL(t *testing.T, ttl time.Duration, tokens ...stri
 		return "", ctx.Err()
 	}, captcha.PoolConfig{Size: 1, Workers: 1, TTL: ttl})
 	t.Cleanup(pool.Close)
-	takeCtx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	lease, err := pool.TakeLease(takeCtx)
-	if err != nil {
-		t.Fatalf("wait for captcha pool: %v", err)
+	// Wait for the prewarm without taking a lease: taking frees capacity and
+	// starts an async refill, which can enqueue tok-2 before Release returns
+	// tok-1 to a size-1 pool and make the first token nondeterministic.
+	deadline := time.Now().Add(time.Second)
+	for pool.Ready() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for captcha pool prewarm")
+		}
+		time.Sleep(time.Millisecond)
 	}
-	lease.Release()
 	return pool, &extracts
 }
 
