@@ -18,7 +18,7 @@ const testPin = "4f1a2b3c-0000-4000-8000-000000000001"
 
 func TestApplyFunctionPin(t *testing.T) {
 	t.Run("body pin is split off the model", func(t *testing.T) {
-		raw := []byte(`{"model":"` + testPin + `@moonshotai/kimi-k3","messages":[{"role":"user","content":"hi"}],"stream":true}`)
+		raw := []byte(`{"model":"` + testPin + `@moonshotai/kimi-k3_1-pro","messages":[{"role":"user","content":"hi"}],"stream":true}`)
 		body, pin, slug, err := applyFunctionPin(raw, "")
 		if err != nil {
 			t.Fatal(err)
@@ -32,7 +32,7 @@ func TestApplyFunctionPin(t *testing.T) {
 		if strings.Contains(string(body), testPin) {
 			t.Fatalf("pin still in body: %s", body)
 		}
-		if bodyModel(t, body) != "moonshotai/kimi-k3" {
+		if bodyModel(t, body) != "moonshotai/kimi-k3_1-pro" {
 			t.Fatalf("body model = %q", body)
 		}
 		if !strings.Contains(string(body), `"content":"hi"`) || !strings.Contains(string(body), `"stream":true`) {
@@ -41,7 +41,7 @@ func TestApplyFunctionPin(t *testing.T) {
 	})
 
 	t.Run("no pin leaves the body alone", func(t *testing.T) {
-		raw := []byte(`{"model":"moonshotai/kimi-k3","messages":[]}`)
+		raw := []byte(`{"model":"moonshotai/kimi-k3_1-pro","messages":[]}`)
 		body, pin, _, err := applyFunctionPin(raw, "")
 		if err != nil {
 			t.Fatal(err)
@@ -55,7 +55,7 @@ func TestApplyFunctionPin(t *testing.T) {
 	})
 
 	t.Run("header pin passes through", func(t *testing.T) {
-		raw := []byte(`{"model":"moonshotai/kimi-k3"}`)
+		raw := []byte(`{"model":"moonshotai/kimi-k3_1-pro"}`)
 		body, pin, _, err := applyFunctionPin(raw, testPin)
 		if err != nil {
 			t.Fatal(err)
@@ -83,16 +83,16 @@ func TestApplyFunctionPin(t *testing.T) {
 	})
 
 	t.Run("malformed pins are rejected", func(t *testing.T) {
-		if _, _, _, err := applyFunctionPin([]byte(`{"model":"bad id@moonshotai/kimi-k3"}`), ""); err == nil {
+		if _, _, _, err := applyFunctionPin([]byte(`{"model":"bad id@moonshotai/kimi-k3_1-pro"}`), ""); err == nil {
 			t.Fatal("want error for a pin with a space")
 		}
-		if _, _, _, err := applyFunctionPin([]byte(`{"model":"@moonshotai/kimi-k3"}`), ""); err == nil {
+		if _, _, _, err := applyFunctionPin([]byte(`{"model":"@moonshotai/kimi-k3_1-pro"}`), ""); err == nil {
 			t.Fatal("want error for an empty pin")
 		}
 		if _, _, _, err := applyFunctionPin([]byte(`{"model":"`+testPin+`@"}`), ""); err == nil {
 			t.Fatal("want error for an empty model id")
 		}
-		if _, _, _, err := applyFunctionPin([]byte(`{"model":"moonshotai/kimi-k3"}`), "not a uuid"); err == nil {
+		if _, _, _, err := applyFunctionPin([]byte(`{"model":"moonshotai/kimi-k3_1-pro"}`), "not a uuid"); err == nil {
 			t.Fatal("want error for a malformed header pin")
 		}
 		if _, _, _, err := applyFunctionPin([]byte(`{"model":"`+testPin+`@bad model"}`), ""); err == nil {
@@ -180,14 +180,14 @@ func TestFunctionPinMiddlewareFeedsTheExecutor(t *testing.T) {
 
 	t.Run("pinned model", func(t *testing.T) {
 		status, echo, body := post("/v1/chat/completions",
-			`{"model":"`+testPin+`@moonshotai/kimi-k3","messages":[{"role":"user","content":"hi"}]}`, nil)
+			`{"model":"`+testPin+`@moonshotai/kimi-k3_1-pro","messages":[{"role":"user","content":"hi"}]}`, nil)
 		if status != http.StatusOK {
 			t.Fatalf("status = %d (%s)", status, body)
 		}
 		if echo.pin != testPin {
 			t.Fatalf("%s = %q, want %q", functionIDHeader, echo.pin, testPin)
 		}
-		if !strings.Contains(body, `"model":"moonshotai/kimi-k3"`) {
+		if !strings.Contains(body, `"model":"moonshotai/kimi-k3_1-pro"`) {
 			t.Fatalf("handler saw %s", body)
 		}
 		// The rewritten model must still route: that is what cliproxy checks.
@@ -198,23 +198,23 @@ func TestFunctionPinMiddlewareFeedsTheExecutor(t *testing.T) {
 
 	t.Run("header pin only", func(t *testing.T) {
 		status, echo, body := post("/v1/chat/completions",
-			`{"model":"moonshotai/kimi-k3","messages":[]}`, map[string]string{functionIDHeader: testPin})
-		if status != http.StatusOK || echo.pin != testPin || !strings.Contains(body, `"model":"moonshotai/kimi-k3"`) {
+			`{"model":"moonshotai/kimi-k3_1-pro","messages":[]}`, map[string]string{functionIDHeader: testPin})
+		if status != http.StatusOK || echo.pin != testPin || !strings.Contains(body, `"model":"moonshotai/kimi-k3_1-pro"`) {
 			t.Fatalf("status=%d pin=%q body=%s", status, echo.pin, body)
 		}
 	})
 
 	t.Run("body pin wins over header pin", func(t *testing.T) {
 		_, echo, _ := post("/v1/chat/completions",
-			`{"model":"`+testPin+`@moonshotai/kimi-k3"}`, map[string]string{functionIDHeader: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"})
+			`{"model":"`+testPin+`@moonshotai/kimi-k3_1-pro"}`, map[string]string{functionIDHeader: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"})
 		if echo.pin != testPin {
 			t.Fatalf("pin = %q, want the body pin %q", echo.pin, testPin)
 		}
 	})
 
 	t.Run("unpinned request is untouched", func(t *testing.T) {
-		status, echo, body := post("/v1/chat/completions", `{"model":"moonshotai/kimi-k3","messages":[]}`, nil)
-		if status != http.StatusOK || echo.pin != "" || body != `{"model":"moonshotai/kimi-k3","messages":[]}` {
+		status, echo, body := post("/v1/chat/completions", `{"model":"moonshotai/kimi-k3_1-pro","messages":[]}`, nil)
+		if status != http.StatusOK || echo.pin != "" || body != `{"model":"moonshotai/kimi-k3_1-pro","messages":[]}` {
 			t.Fatalf("status=%d pin=%q body=%s", status, echo.pin, body)
 		}
 	})
@@ -234,14 +234,14 @@ func TestFunctionPinMiddlewareFeedsTheExecutor(t *testing.T) {
 	})
 
 	t.Run("malformed pin returns 400", func(t *testing.T) {
-		status, _, msg := post("/v1/chat/completions", `{"model":"bad id@moonshotai/kimi-k3"}`, nil)
+		status, _, msg := post("/v1/chat/completions", `{"model":"bad id@moonshotai/kimi-k3_1-pro"}`, nil)
 		if status != http.StatusBadRequest || !strings.Contains(msg, "nv-function-id") {
 			t.Fatalf("status=%d msg=%s", status, msg)
 		}
 	})
 
 	t.Run("other endpoints are skipped", func(t *testing.T) {
-		status, echo, body := post("/v1/images/generations", `{"model":"`+testPin+`@moonshotai/kimi-k3"}`, nil)
+		status, echo, body := post("/v1/images/generations", `{"model":"`+testPin+`@moonshotai/kimi-k3_1-pro"}`, nil)
 		if status != http.StatusOK || echo.pin != "" || !strings.Contains(body, testPin) {
 			t.Fatalf("status=%d pin=%q body=%s", status, echo.pin, body)
 		}

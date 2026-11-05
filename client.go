@@ -83,7 +83,7 @@ func WithThinking(enable bool) Option {
 }
 
 // New creates a client configured with an hCaptcha token (default model
-// moonshotai/kimi-k3; override with WithModel).
+// moonshotai/kimi-k3_1-pro; override with WithModel).
 func New(opts ...Option) *Client {
 	c := &Client{
 		httpClient: &http.Client{Timeout: requestTimeout},
@@ -158,7 +158,7 @@ func (c *Client) applyDefaults(r *ChatRequest) {
 		} else {
 			// Only inject thinking kwargs for models known to accept them
 			// (Capability.Thinking). Most of the current anonymous catalog
-			// (kimi-k3 etc.) rejects chat_template_kwargs with 400.
+			// (e.g. kimi-k3_1-pro) rejects chat_template_kwargs with 400.
 			info, _, err := c.modelInfo(r.Model)
 			if err != nil || info.Capability == nil || !info.Capability.Thinking {
 				return

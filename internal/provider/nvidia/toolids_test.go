@@ -280,9 +280,9 @@ func TestExecutor_Execute_RewritesToolCallIDs(t *testing.T) {
 	})
 
 	// Claude protocol request
-	claudeReq := []byte(`{"model":"moonshotai/kimi-k3","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`)
+	claudeReq := []byte(`{"model":"moonshotai/kimi-k3_1-pro","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`)
 	res, err := exec.Execute(context.Background(), &coreauth.Auth{}, clipexec.Request{
-		Model:   "moonshotai/kimi-k3",
+		Model:   "moonshotai/kimi-k3_1-pro",
 		Payload: claudeReq,
 	}, clipexec.Options{
 		SourceFormat: sdktranslator.FormatClaude,
@@ -318,9 +318,9 @@ func TestExecutor_ExecuteStream_RewritesToolCallIDs(t *testing.T) {
 		HTTPClient:  &http.Client{Transport: transport},
 	})
 
-	openAIReq := []byte(`{"model":"moonshotai/kimi-k3","messages":[{"role":"user","content":"hi"}],"stream":true}`)
+	openAIReq := []byte(`{"model":"moonshotai/kimi-k3_1-pro","messages":[{"role":"user","content":"hi"}],"stream":true}`)
 	streamRes, err := exec.ExecuteStream(context.Background(), &coreauth.Auth{}, clipexec.Request{
-		Model:   "moonshotai/kimi-k3",
+		Model:   "moonshotai/kimi-k3_1-pro",
 		Payload: openAIReq,
 	}, clipexec.Options{
 		Stream:       true,
@@ -366,9 +366,9 @@ func TestExecutor_ExecuteStream_ClaudeProtocol_RewritesToolCallIDs(t *testing.T)
 		HTTPClient:  &http.Client{Transport: transport},
 	})
 
-	claudeReq := []byte(`{"model":"moonshotai/kimi-k3","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	claudeReq := []byte(`{"model":"moonshotai/kimi-k3_1-pro","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	streamRes, err := exec.ExecuteStream(context.Background(), &coreauth.Auth{}, clipexec.Request{
-		Model:   "moonshotai/kimi-k3",
+		Model:   "moonshotai/kimi-k3_1-pro",
 		Payload: claudeReq,
 	}, clipexec.Options{
 		Stream:          true,

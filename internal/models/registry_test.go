@@ -7,17 +7,17 @@ func TestLookupDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup(\"\"): %v", err)
 	}
-	if info.Slug != "kimi-k3" {
-		t.Fatalf("default slug = %q want kimi-k3", info.Slug)
+	if info.Slug != "kimi-k3_1-pro" {
+		t.Fatalf("default slug = %q want kimi-k3_1-pro", info.Slug)
 	}
-	if info.FunctionID != "1586112a-925c-48af-8631-7c815dbd749c" {
-		t.Fatalf("default function id = %q want the known Kimi-K3 id", info.FunctionID)
+	if info.FunctionID != "b79234a1-64e1-479e-87e7-1c8e3af74262" {
+		t.Fatalf("default function id = %q want the known Kimi-K3.1 id", info.FunctionID)
 	}
 }
 
 func TestLookupKnown(t *testing.T) {
 	cases := map[string]string{
-		"moonshotai/kimi-k3":                "kimi-k3",
+		"moonshotai/kimi-k3_1-pro":          "kimi-k3_1-pro",
 		"deepseek-ai/deepseek-v4-pro-0813":  "deepseek-v4-pro-0813",
 		"nvidia/nemotron-3-ultra-550b-a55b": "nemotron-3-ultra-550b-a55b",
 	}
@@ -51,11 +51,11 @@ func TestLookupUnknown(t *testing.T) {
 }
 
 func TestPredictEndpoint(t *testing.T) {
-	info, err := Lookup("moonshotai/kimi-k3")
+	info, err := Lookup("moonshotai/kimi-k3_1-pro")
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)
 	}
-	want := PredictBase + "/v2/predict/models/" + Namespace + "/kimi-k3"
+	want := PredictBase + "/v3/predict/stateless/v1/chat/completions"
 	if got := info.PredictEndpoint(); got != want {
 		t.Fatalf("PredictEndpoint() = %q want %q", got, want)
 	}

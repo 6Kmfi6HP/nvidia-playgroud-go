@@ -34,7 +34,7 @@ func TestFetchCatalogIDsFallback(t *testing.T) {
 	}))
 	defer filtered.Close()
 	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeTestBody(t, w, []byte(catalogHTML("moonshotai/kimi-k3", "nvidia/nemotron-3-ultra-550b-a55b")))
+		writeTestBody(t, w, []byte(catalogHTML("moonshotai/kimi-k3_1-pro", "nvidia/nemotron-3-ultra-550b-a55b")))
 	}))
 	defer fallback.Close()
 
@@ -46,7 +46,7 @@ func TestFetchCatalogIDsFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchCatalogIDs: %v", err)
 	}
-	if len(ids) != 2 || ids[0] != "moonshotai/kimi-k3" || ids[1] != "nvidia/nemotron-3-ultra-550b-a55b" {
+	if len(ids) != 2 || ids[0] != "moonshotai/kimi-k3_1-pro" || ids[1] != "nvidia/nemotron-3-ultra-550b-a55b" {
 		t.Fatalf("unexpected ids after fallback: %v", ids)
 	}
 }

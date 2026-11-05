@@ -20,14 +20,14 @@ func TestResolveTarget(t *testing.T) {
 		{
 			name:    "no flags falls back to the default registry model",
 			cfg:     config{},
-			wantURL: models.PredictBase + "/v2/predict/models/qc69jvmznzxy/kimi-k3",
-			wantFID: "1586112a-925c-48af-8631-7c815dbd749c",
+			wantURL: models.PredictBase + "/v3/predict/stateless/v1/chat/completions",
+			wantFID: "b79234a1-64e1-479e-87e7-1c8e3af74262",
 			wantMod: models.DefaultModel,
 		},
 		{
 			name:    "registry model fills the triple",
 			cfg:     config{model: "minimaxai/minimax-m3"},
-			wantURL: models.PredictBase + "/v2/predict/models/qc69jvmznzxy/minimax-m3",
+			wantURL: models.PredictBase + "/v3/predict/stateless/v1/chat/completions",
 			wantFID: "87ea0ddc-cff1-4bca-bf8b-3bd98a35ddd0",
 			wantMod: "minimaxai/minimax-m3",
 		},
@@ -39,21 +39,21 @@ func TestResolveTarget(t *testing.T) {
 				slug:       "some-slug",
 				functionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			},
-			wantURL: models.PredictBase + "/v2/predict/models/otherns/some-slug",
+			wantURL: models.PredictBase + "/v3/predict/stateless/v1/chat/completions",
 			wantFID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			wantMod: "minimaxai/minimax-m3",
 		},
 		{
 			name:    "slug override keeps the pinned function id",
-			cfg:     config{model: "moonshotai/kimi-k3", slug: "kimi-k2"},
-			wantURL: models.PredictBase + "/v2/predict/models/qc69jvmznzxy/kimi-k2",
-			wantFID: "1586112a-925c-48af-8631-7c815dbd749c",
-			wantMod: "moonshotai/kimi-k3",
+			cfg:     config{model: "moonshotai/kimi-k3_1-pro", slug: "kimi-k2"},
+			wantURL: models.PredictBase + "/v3/predict/stateless/v1/chat/completions",
+			wantFID: "b79234a1-64e1-479e-87e7-1c8e3af74262",
+			wantMod: "moonshotai/kimi-k3_1-pro",
 		},
 		{
 			name:    "unknown model with a pinned triple",
 			cfg:     config{model: "acme/new-llm", slug: "new-llm", functionID: "fid-1"},
-			wantURL: models.PredictBase + "/v2/predict/models/qc69jvmznzxy/new-llm",
+			wantURL: models.PredictBase + "/v3/predict/stateless/v1/chat/completions",
 			wantFID: "fid-1",
 			wantMod: "acme/new-llm",
 		},
@@ -64,20 +64,20 @@ func TestResolveTarget(t *testing.T) {
 		},
 		{
 			name:    "model-field pin overrides only the function id",
-			cfg:     config{model: "4f1a2b3c-0000-4000-8000-000000000001@moonshotai/kimi-k3"},
-			wantURL: models.PredictBase + "/v2/predict/models/qc69jvmznzxy/kimi-k3",
+			cfg:     config{model: "4f1a2b3c-0000-4000-8000-000000000001@moonshotai/kimi-k3_1-pro"},
+			wantURL: models.PredictBase + "/v3/predict/stateless/v1/chat/completions",
 			wantFID: "4f1a2b3c-0000-4000-8000-000000000001",
-			wantMod: "moonshotai/kimi-k3",
+			wantMod: "moonshotai/kimi-k3_1-pro",
 		},
 		{
 			name: "explicit -function-id wins over the model-field pin",
 			cfg: config{
-				model:      "4f1a2b3c-0000-4000-8000-000000000001@moonshotai/kimi-k3",
+				model:      "4f1a2b3c-0000-4000-8000-000000000001@moonshotai/kimi-k3_1-pro",
 				functionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			},
-			wantURL: models.PredictBase + "/v2/predict/models/qc69jvmznzxy/kimi-k3",
+			wantURL: models.PredictBase + "/v3/predict/stateless/v1/chat/completions",
 			wantFID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-			wantMod: "moonshotai/kimi-k3",
+			wantMod: "moonshotai/kimi-k3_1-pro",
 		},
 		{
 			name:    "pin on an unknown model still needs the triple",
@@ -86,7 +86,7 @@ func TestResolveTarget(t *testing.T) {
 		},
 		{
 			name:    "malformed pin is rejected",
-			cfg:     config{model: "not a uuid@moonshotai/kimi-k3"},
+			cfg:     config{model: "not a uuid@moonshotai/kimi-k3_1-pro"},
 			wantErr: "invalid nv-function-id",
 		},
 		{
@@ -187,7 +187,7 @@ func TestCurlCommand(t *testing.T) {
 	cmd := curlCommand(info, "P1_tok", []byte(`{"model":"a/b","messages":[{"role":"user","content":"it's"}]}`))
 
 	for _, want := range []string{
-		"/v2/predict/models/ns1/sl1",
+		"/v3/predict/stateless/v1/chat/completions",
 		"-H 'nv-function-id: fid1'",
 		"-H 'nv-captcha-token: P1_tok'",
 		`'\''`, // embedded single quote escaped for the shell

@@ -4,7 +4,7 @@
 //
 // The predict call needs exactly four things:
 //
-//	POST https://buildapi.ngc.nvidia.com/v2/predict/models/{namespace}/{slug}
+//	POST https://buildapi.ngc.nvidia.com/v3/predict/stateless/v1/chat/completions
 //	Content-Type: application/json
 //	nv-function-id:   {functionID}      <- per-model NVCF function UUID
 //	nv-captcha-token: P1_...            <- one-shot hCaptcha passcode

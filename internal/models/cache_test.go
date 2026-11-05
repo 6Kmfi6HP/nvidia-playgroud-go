@@ -15,7 +15,7 @@ import (
 func TestCacheRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models-cache.json")
 	reg := map[string]ModelInfo{
-		"moonshotai/kimi-k3": {Slug: "kimi-k3", Namespace: Namespace, FunctionID: "1586112a-925c-48af-8631-7c815dbd749c"},
+		"moonshotai/kimi-k3_1-pro": {Slug: "kimi-k3", Namespace: Namespace, FunctionID: "1586112a-925c-48af-8631-7c815dbd749c"},
 		"nvidia/nemotron-3-ultra-550b-a55b": {
 			Slug: "nemotron-3-ultra-550b-a55b", Namespace: Namespace, FunctionID: "948fe171-ce7a-4332-8bc0-5e14e90259f9",
 			Capability: &ModelCapability{ToolCalling: true, Vision: true},
@@ -64,7 +64,7 @@ func TestRefreshWritesCache(t *testing.T) {
 			writeTestBody(t, w, []byte(`<html>"nvcfFunctionId":"1586112a-925c-48af-8631-7c815dbd749c","namespace":"qc69jvmznzxy"</html>`))
 			return
 		}
-		writeTestBody(t, w, []byte(catalogHTML("moonshotai/kimi-k3")))
+		writeTestBody(t, w, []byte(catalogHTML("moonshotai/kimi-k3_1-pro")))
 	}))
 	defer srv.Close()
 

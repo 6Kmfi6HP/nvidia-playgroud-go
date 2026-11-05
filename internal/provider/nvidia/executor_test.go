@@ -75,8 +75,8 @@ func receiveTestValue[T any](t *testing.T, ch <-chan T, name string) T {
 
 func leaseTestRequest() (clipexec.Request, clipexec.Options) {
 	return clipexec.Request{
-		Model:   "moonshotai/kimi-k3",
-		Payload: []byte(`{"model":"moonshotai/kimi-k3","messages":[{"role":"user","content":"hi"}]}`),
+		Model:   "moonshotai/kimi-k3_1-pro",
+		Payload: []byte(`{"model":"moonshotai/kimi-k3_1-pro","messages":[{"role":"user","content":"hi"}]}`),
 	}, clipexec.Options{SourceFormat: sdktranslator.FormatOpenAI}
 }
 
@@ -218,7 +218,7 @@ func TestExecuteStreamMockUpstream(t *testing.T) {
 	}))
 	defer up.Close()
 
-	info, err := models.Lookup("moonshotai/kimi-k3")
+	info, err := models.Lookup("moonshotai/kimi-k3_1-pro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,8 +230,8 @@ func TestExecuteStreamMockUpstream(t *testing.T) {
 	})
 
 	stream, err := e.ExecuteStream(context.Background(), nil, clipexec.Request{
-		Model:   "moonshotai/kimi-k3",
-		Payload: []byte(`{"model":"moonshotai/kimi-k3","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+		Model:   "moonshotai/kimi-k3_1-pro",
+		Payload: []byte(`{"model":"moonshotai/kimi-k3_1-pro","messages":[{"role":"user","content":"hi"}],"stream":true}`),
 	}, clipexec.Options{
 		Stream:       true,
 		SourceFormat: sdktranslator.FormatOpenAI,
@@ -735,8 +735,8 @@ func TestExecutePoolLease_RetryableCaptchaUsesFreshToken(t *testing.T) {
 }
 
 func TestTranslatorClaudeToOpenAIChatShape(t *testing.T) {
-	claude := []byte(`{"model":"moonshotai/kimi-k3","max_tokens":64,"messages":[{"role":"user","content":"Hi"}],"stream":false}`)
-	out := sdktranslator.TranslateRequest(sdktranslator.FormatClaude, sdktranslator.FormatOpenAI, "moonshotai/kimi-k3", claude, false)
+	claude := []byte(`{"model":"moonshotai/kimi-k3_1-pro","max_tokens":64,"messages":[{"role":"user","content":"Hi"}],"stream":false}`)
+	out := sdktranslator.TranslateRequest(sdktranslator.FormatClaude, sdktranslator.FormatOpenAI, "moonshotai/kimi-k3_1-pro", claude, false)
 	if len(out) == 0 {
 		t.Fatal("empty translation")
 	}
@@ -747,14 +747,14 @@ func TestTranslatorClaudeToOpenAIChatShape(t *testing.T) {
 	if _, ok := raw["messages"]; !ok {
 		t.Fatalf("expected messages in openai chat shape, got %s", out)
 	}
-	if raw["model"] != "moonshotai/kimi-k3" {
+	if raw["model"] != "moonshotai/kimi-k3_1-pro" {
 		t.Fatalf("model=%v", raw["model"])
 	}
 }
 
 func TestTranslatorResponsesToOpenAIChatShape(t *testing.T) {
-	responses := []byte(`{"model":"moonshotai/kimi-k3","input":"Hi","stream":false}`)
-	out := sdktranslator.TranslateRequest(sdktranslator.FormatOpenAIResponse, sdktranslator.FormatOpenAI, "moonshotai/kimi-k3", responses, false)
+	responses := []byte(`{"model":"moonshotai/kimi-k3_1-pro","input":"Hi","stream":false}`)
+	out := sdktranslator.TranslateRequest(sdktranslator.FormatOpenAIResponse, sdktranslator.FormatOpenAI, "moonshotai/kimi-k3_1-pro", responses, false)
 	if len(out) == 0 {
 		t.Fatal("empty translation")
 	}
@@ -784,7 +784,7 @@ func TestRegistryModelsSorted(t *testing.T) {
 		}
 		byID[m.ID] = true
 	}
-	for _, want := range []string{"moonshotai/kimi-k3", "deepseek-ai/deepseek-v4-pro-0813"} {
+	for _, want := range []string{"moonshotai/kimi-k3_1-pro", "deepseek-ai/deepseek-v4-pro-0813"} {
 		if !byID[want] {
 			t.Errorf("missing %q", want)
 		}
@@ -812,8 +812,8 @@ func TestExecuteUsesHeaderCaptcha(t *testing.T) {
 	hdr := make(http.Header)
 	hdr.Set("nv-captcha-token", "from-header")
 	resp, err := e.Execute(context.Background(), nil, clipexec.Request{
-		Model:   "moonshotai/kimi-k3",
-		Payload: []byte(`{"model":"moonshotai/kimi-k3","messages":[{"role":"user","content":"hi"}]}`),
+		Model:   "moonshotai/kimi-k3_1-pro",
+		Payload: []byte(`{"model":"moonshotai/kimi-k3_1-pro","messages":[{"role":"user","content":"hi"}]}`),
 	}, clipexec.Options{
 		SourceFormat: sdktranslator.FormatOpenAI,
 		Headers:      hdr,
@@ -889,9 +889,9 @@ func TestExecute_sendsResponsesSamplingFieldsToPlayground(t *testing.T) {
 
 	// When: a Responses request uses Chat-compatible sampling and attribution fields.
 	_, err := executor.Execute(context.Background(), nil, clipexec.Request{
-		Model: "moonshotai/kimi-k3",
+		Model: "moonshotai/kimi-k3_1-pro",
 		Payload: []byte(`{
-			"model":"moonshotai/kimi-k3",
+			"model":"moonshotai/kimi-k3_1-pro",
 			"input":"hello",
 			"temperature":0.25,
 			"top_p":0.8,
@@ -938,9 +938,9 @@ func TestExecute_forwardsResponsesStoreWithoutRejecting(t *testing.T) {
 
 	// When: a Responses request includes store (unsupported by NVIDIA, but must not be rejected).
 	_, err := executor.Execute(context.Background(), nil, clipexec.Request{
-		Model: "moonshotai/kimi-k3",
+		Model: "moonshotai/kimi-k3_1-pro",
 		Payload: []byte(`{
-			"model":"moonshotai/kimi-k3",
+			"model":"moonshotai/kimi-k3_1-pro",
 			"input":"hello",
 			"store":true
 		}`),
@@ -960,7 +960,7 @@ func TestExecute_forwardsResponsesStoreWithoutRejecting(t *testing.T) {
 const pinnedFunction = "4f1a2b3c-0000-4000-8000-000000000001"
 
 func TestPreparePayloadFunctionPin(t *testing.T) {
-	reg, err := models.Lookup("moonshotai/kimi-k3")
+	reg, err := models.Lookup("moonshotai/kimi-k3_1-pro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -980,40 +980,40 @@ func TestPreparePayloadFunctionPin(t *testing.T) {
 	}{
 		{
 			name:         "no pin uses the registry value",
-			model:        "moonshotai/kimi-k3",
+			model:        "moonshotai/kimi-k3_1-pro",
 			wantFunction: reg.FunctionID,
-			wantBody:     "moonshotai/kimi-k3",
+			wantBody:     "moonshotai/kimi-k3_1-pro",
 		},
 		{
 			name:         "body pin overrides the function id",
-			model:        pinnedFunction + "@moonshotai/kimi-k3",
+			model:        pinnedFunction + "@moonshotai/kimi-k3_1-pro",
 			wantFunction: pinnedFunction,
-			wantBody:     "moonshotai/kimi-k3",
+			wantBody:     "moonshotai/kimi-k3_1-pro",
 		},
 		{
 			name:         "header pin overrides the function id",
-			model:        "moonshotai/kimi-k3",
+			model:        "moonshotai/kimi-k3_1-pro",
 			headerPin:    pinnedFunction,
 			wantFunction: pinnedFunction,
-			wantBody:     "moonshotai/kimi-k3",
+			wantBody:     "moonshotai/kimi-k3_1-pro",
 		},
 		{
 			name:         "body pin wins over header pin",
-			model:        pinnedFunction + "@moonshotai/kimi-k3",
+			model:        pinnedFunction + "@moonshotai/kimi-k3_1-pro",
 			headerPin:    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 			wantFunction: pinnedFunction,
-			wantBody:     "moonshotai/kimi-k3",
+			wantBody:     "moonshotai/kimi-k3_1-pro",
 		},
 		{
 			name:         "blank header pin is ignored",
-			model:        "moonshotai/kimi-k3",
+			model:        "moonshotai/kimi-k3_1-pro",
 			headerPin:    "   ",
 			wantFunction: reg.FunctionID,
-			wantBody:     "moonshotai/kimi-k3",
+			wantBody:     "moonshotai/kimi-k3_1-pro",
 		},
 		{
 			name:         "invalid header pin is a client error",
-			model:        "moonshotai/kimi-k3",
+			model:        "moonshotai/kimi-k3_1-pro",
 			headerPin:    "pinned id",
 			wantFunction: reg.FunctionID,
 			wantErr:      "nv-function-id",
@@ -1034,7 +1034,7 @@ func TestPreparePayloadFunctionPin(t *testing.T) {
 		},
 		{
 			name:         "header slug + function id synthesize the target",
-			model:        "moonshotai/kimi-k3",
+			model:        "moonshotai/kimi-k3_1-pro",
 			headerPin:    pinnedFunction,
 			headerSlug:   "qwen3.8-2.4t-a95b",
 			headerNS:     "customns",
@@ -1045,13 +1045,13 @@ func TestPreparePayloadFunctionPin(t *testing.T) {
 		},
 		{
 			name:       "header slug without a function id is a client error",
-			model:      "moonshotai/kimi-k3",
+			model:      "moonshotai/kimi-k3_1-pro",
 			headerSlug: "qwen3.8-2.4t-a95b",
 			wantErr:    "nv-function-id",
 		},
 		{
 			name:       "invalid header slug is a client error",
-			model:      "moonshotai/kimi-k3",
+			model:      "moonshotai/kimi-k3_1-pro",
 			headerPin:  pinnedFunction,
 			headerSlug: "bad slug",
 			wantErr:    "nv-function-slug",
@@ -1144,7 +1144,7 @@ func TestExecuteStreamSendsPinnedFunctionID(t *testing.T) {
 		PredictURL:  func(models.ModelInfo) string { return up.URL },
 	})
 
-	pinned := pinnedFunction + "@moonshotai/kimi-k3"
+	pinned := pinnedFunction + "@moonshotai/kimi-k3_1-pro"
 	stream, err := e.ExecuteStream(context.Background(), nil, clipexec.Request{
 		Model:   pinned,
 		Payload: []byte(`{"model":"` + pinned + `","messages":[{"role":"user","content":"hi"}],"stream":true}`),
@@ -1164,7 +1164,7 @@ func TestExecuteStreamSendsPinnedFunctionID(t *testing.T) {
 	if gotFunction != pinnedFunction {
 		t.Fatalf("upstream nv-function-id = %q, want %q", gotFunction, pinnedFunction)
 	}
-	if gotBodyModel != "moonshotai/kimi-k3" {
+	if gotBodyModel != "moonshotai/kimi-k3_1-pro" {
 		t.Fatalf("upstream body model = %q, want the unpinned model id", gotBodyModel)
 	}
 }

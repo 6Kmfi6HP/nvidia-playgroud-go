@@ -13,9 +13,9 @@ func TestSplitFunctionRef(t *testing.T) {
 		base   string
 		hasPin bool
 	}{
-		{in: "moonshotai/kimi-k3", base: "moonshotai/kimi-k3"},
+		{in: "moonshotai/kimi-k3_1-pro", base: "moonshotai/kimi-k3_1-pro"},
 		{in: "", base: ""},
-		{in: "1586112a-925c-48af-8631-7c815dbd749c@moonshotai/kimi-k3", pin: "1586112a-925c-48af-8631-7c815dbd749c", base: "moonshotai/kimi-k3", hasPin: true},
+		{in: "1586112a-925c-48af-8631-7c815dbd749c@moonshotai/kimi-k3_1-pro", pin: "1586112a-925c-48af-8631-7c815dbd749c", base: "moonshotai/kimi-k3_1-pro", hasPin: true},
 		// A function id never contains "@", so the first one is the split point.
 		{in: "fid@pub/deep@weird", pin: "fid", base: "pub/deep@weird", hasPin: true},
 		{in: "  fid@pub/slug  ", pin: "fid", base: "pub/slug", hasPin: true},
@@ -64,10 +64,10 @@ func TestValidFunctionID(t *testing.T) {
 }
 
 func TestValidateFunctionRef(t *testing.T) {
-	if err := ValidateFunctionRef("1586112a-925c-48af-8631-7c815dbd749c", "moonshotai/kimi-k3"); err != nil {
+	if err := ValidateFunctionRef("1586112a-925c-48af-8631-7c815dbd749c", "moonshotai/kimi-k3_1-pro"); err != nil {
 		t.Fatalf("valid ref rejected: %v", err)
 	}
-	if err := ValidateFunctionRef("bad id", "moonshotai/kimi-k3"); err == nil || !strings.Contains(err.Error(), "nv-function-id") {
+	if err := ValidateFunctionRef("bad id", "moonshotai/kimi-k3_1-pro"); err == nil || !strings.Contains(err.Error(), "nv-function-id") {
 		t.Fatalf("bad pin error = %v", err)
 	}
 	if err := ValidateFunctionRef("good-id", ""); err == nil || !strings.Contains(err.Error(), "missing model id") {

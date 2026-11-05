@@ -12,6 +12,8 @@
 > **English:** A reverse-engineered Go client and multi-format reverse proxy for **NVIDIA Build Playground** (build.nvidia.com). It is **multi-model**: the registry seeds 11 anonymous playground models (DeepSeek, Kimi, MiniMax, Nemotron, …), refreshes the catalog at runtime by re-scraping the live SSR page, and routes every request to the matching predict endpoint with the per-model `nv-function-id`. hCaptcha credentials are minted by a **pure-Go PoW solver** (embedded V8, no browser), prewarmed into a token pool. The gateway embeds [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) to expose OpenAI Chat Completions, OpenAI Responses and Claude Messages, plus Docker deployments and SSE/latency benchmarks. Inbound gateway API keys are **not** enabled.
 >
 > 历史上的默认模型 `z-ai/glm-5.2` 已于 2026-08 被 NVIDIA 从匿名目录移除（后端 404），项目默认模型已切换为 `moonshotai/kimi-k3`；预测网关从 `api.ngc.nvidia.com` 迁移到 `buildapi.ngc.nvidia.com`。
+>
+> **2026-11 上游变更：** `moonshotai/kimi-k3` 已下架（registry 404 `AI Playground does not exist in registry`），默认模型切换为 `moonshotai/kimi-k3_1-pro`（function-id `b79234a1-64e1-479e-87e7-1c8e3af74262`，versionId `88119270-fb6c-488e-bec6-8bdf4aa63303`）。同时确认了**免 registry 校验**的调用路由 `POST /v3/predict/stateless{path}`（`nv-function-id` 客户端可控，任何 NVCF function-id 均可，含未上架模型；GET 类路径如 `/v1/models` 完全免 captcha），以及匿名 fid 数据源 `GET /v2/predict/queues/models/{namespace}/{slug}`，详见[发现的 API 端点](#发现的-api-端点)。
 
 **中文:** 逆向工程 NVIDIA Build Playground（build.nvidia.com）的 API 调用，实现 Go 语言本地调用其**匿名 playground 模型**。支持多模型：内置注册表种子了 11 个可匿名调用的模型（DeepSeek、Kimi、MiniMax、Nemotron、DiffusionGemma 等），并可在运行时定期抓取 `https://build.nvidia.com/models` 目录页自动刷新，按 `model` 路由到对应的 predict 端点并注入各自的 `nv-function-id`。验证码使用**纯 Go hCaptcha PoW 求解器**（v8go 内嵌 V8 跑官方 hsw.js，不需要 Chromium），维护预热 token 池。网关嵌入 CLIProxyAPI，对外提供 OpenAI Chat Completions / Responses 与 Claude Messages，含 Docker 部署与 SSE/延迟基准。**不**启用网关入站 api-keys 校验。
 
@@ -21,21 +23,21 @@
 # 一键启动多格式代理（纯 Go PoW 验证码池，无浏览器；启动时自动抓取最新模型目录）
 go run ./cmd/serve -auto -addr :8080
 
-# OpenAI Chat Completions（默认模型 moonshotai/kimi-k3）
+# OpenAI Chat Completions（默认模型 moonshotai/kimi-k3_1-pro）
 curl http://localhost:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"moonshotai/kimi-k3","messages":[{"role":"user","content":"Hi"}],"stream":true}'
+  -d '{"model":"moonshotai/kimi-k3_1-pro","messages":[{"role":"user","content":"Hi"}],"stream":true}'
 
 # OpenAI Responses
 curl http://localhost:8080/v1/responses \
   -H 'Content-Type: application/json' \
-  -d '{"model":"moonshotai/kimi-k3","input":"Hi","stream":true}'
+  -d '{"model":"moonshotai/kimi-k3_1-pro","input":"Hi","stream":true}'
 
 # Claude Messages
 curl http://localhost:8080/v1/messages \
   -H 'Content-Type: application/json' \
   -H 'anthropic-version: 2023-06-01' \
-  -d '{"model":"moonshotai/kimi-k3","max_tokens":256,"messages":[{"role":"user","content":"Hi"}],"stream":true}'
+  -d '{"model":"moonshotai/kimi-k3_1-pro","max_tokens":256,"messages":[{"role":"user","content":"Hi"}],"stream":true}'
 
 # 当前可路由的模型列表（来自注册表/最新抓取结果）
 curl http://localhost:8080/v1/models
@@ -62,11 +64,16 @@ docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/nvidia-playgroud-go:latest
 
 | 类型 | 端点 |
 |------|------|
-| **预测 API** (逆向) | `POST https://buildapi.ngc.nvidia.com/v2/predict/models/{namespace}/{slug}` |
+| **预测 API** (逆向) | `POST https://buildapi.ngc.nvidia.com/v2/predict/models/{namespace}/{slug}`（registry 校验，未上架 slug 404） |
+| **预测 API (stateless)** (2026-11) | `POST https://buildapi.ngc.nvidia.com/v3/predict/stateless{path}` + `nv-function-id` 头——**不查 registry**，任意 NVCF function-id 可调；GET 类路径（如 `/v1/models`）**完全免 captcha** |
+| **函数三元组枚举** (匿名) | `GET https://buildapi.ngc.nvidia.com/v2/predict/queues/models/{namespace}/{slug}` → `functionId`/`functionVersionId`/`functionStatus`/`queueDepth` |
+| **NVCF 函数枚举** | `GET https://api.nvcf.nvidia.com/v2/nvcf/functions`（个人 nvapi key；公开目录 85 fid + 非公开函数清单） |
 | **模型目录** (SSR) | `GET https://build.nvidia.com/models`（Next flight data 内嵌 resourceId） |
 | **Playground 页** | `GET https://build.nvidia.com/{publisher}/{slug}/playground`（内嵌 `nvcfFunctionId`） |
 
 > **2026-08 上游变更：** 旧的预测网关 `api.ngc.nvidia.com`（及 `qc69jvmznzxy/glm-5.2`）对匿名账号已返回 404；目录页旧的 `?pageSize=200&filters=...` URL 返回空 body。现在统一走 `buildapi.ngc.nvidia.com`，目录解析迁移到 `/models` 页面。
+>
+> **2026-11 上游变更：** `kimi-k3` 下架，换代 `kimi-k3_1-pro`（fid `b79234a1-64e1-479e-87e7-1c8e3af74262`）；`/v2/predict/models/{slug}` 路由有 registry 门槛（未上架返回 `AI Playground does not exist in registry`），`/v3/predict/stateless{path}` 路由则**不校验** `nv-function-id` 是否在目录内——拿得到 function-id 就能调（包括不在 `models` 页里的函数）。
 
 ### 多模型支持
 
@@ -77,14 +84,14 @@ docker run --rm -p 8080:8080 ghcr.io/6kmfi6hp/nvidia-playgroud-go:latest
 ```
 deepseek-ai/deepseek-v4-flash-0731    deepseek-ai/deepseek-v4-pro-0813
 google/diffusiongemma-26b-a4b-it      meta/muse-glimmer-30b
-minimaxai/minimax-m3                  moonshotai/kimi-k3          ← 默认模型
+minimaxai/minimax-m3                  moonshotai/kimi-k3_1-pro    ← 默认模型（2026-11 换代）
 nvidia/ising-calibration-1.5-31b      nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
 nvidia/nemotron-3-ultra-550b-a55b     nvidia/nemotron-3.5-lightning-30b-a3b
 poolside/laguna-xs-2.1
 ```
 
-- **默认模型** `moonshotai/kimi-k3`（`z-ai/glm-5.2` 2026-08 起被上游从匿名目录移除，后端 404，**不要**再请求它）。
-- 请求体指定任意注册表内模型即可路由到对应端点（serve 与 Go client 都按 `model` 查表拼 URL + 注入 `nv-function-id`；未知模型返回 400 `unknown model`）：
+- **默认模型** `moonshotai/kimi-k3_1-pro`（`z-ai/glm-5.2` 2026-08、`moonshotai/kimi-k3` 2026-11 先后被上游下架，后端 404，**不要**再请求它们）。
+- 请求体指定任意注册表内模型即可路由（serve 与 Go client 都按 `model` 查表取 `nv-function-id`，统一打共享的 stateless 端点——URL 不再含 slug，路由完全由 function-id 头决定；未知模型返回 400 `unknown model`）：
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
@@ -113,16 +120,18 @@ Playground **不**使用 API Key 认证，而是使用 **hCaptcha token** 机制
 #### 请求签名
 
 ```
-POST https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/kimi-k3
+POST https://buildapi.ngc.nvidia.com/v3/predict/stateless/v1/chat/completions
 Content-Type: application/json
 Accept: text/event-stream
-nv-function-id: 1586112a-925c-48af-8631-7c815dbd749c
+nv-function-id: b79234a1-64e1-479e-87e7-1c8e3af74262
 nv-captcha-token: P1_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 Origin: https://build.nvidia.com
 Referer: https://build.nvidia.com/
 ```
 
 **注意:** 不需要 Cookie 或 Authorization 头！认证完全依赖 `nv-captcha-token` 和 Origin 检查。
+
+> **2026-11 起项目改打 stateless 路由**（`/v3/predict/stateless/v1/chat/completions`，见 `ModelInfo.PredictEndpoint()`）：所有模型共用这一个 URL，`nv-function-id` 是唯一路由信号。旧路由 `POST /v2/predict/models/{namespace}/{slug}` 有 registry 校验（已下架的 `kimi-k3` 等返回 `AI Playground does not exist in registry`），stateless 路由不校验——任何活的 NVCF function-id 都能调（含未上架函数）。GET 类路径（如 `/v1/models`）甚至**不需要 captcha token**。
 
 ### Token 生命周期
 
@@ -142,7 +151,7 @@ Referer: https://build.nvidia.com/
 | `nvidia/nemotron-3-ultra-550b-a55b` | `reasoning_effort` ∈ {none, medium, high}（默认 high） |
 | `google/diffusiongemma-26b-a4b-it` | `enable_thinking` 开关 |
 | `minimaxai/minimax-m3` | `thinking_mode` ∈ {enabled, disabled} |
-| 其他（kimi-k3 等） | 不接受 thinking kwargs，统一剥离 |
+| 其他（kimi-k3_1-pro 等） | 不接受 thinking kwargs，统一剥离 |
 
 开启推理链时，上游在 SSE `delta` / 非流式 `message` 中先返回 `reasoning_content`，再返回 `content`。
 
@@ -178,7 +187,7 @@ go run ./cmd/example -captcha "P1_eyJ..."
 或在代码中：
 
 ```go
-client := nvidia.New(nvidia.WithCaptchaToken("P1_eyJ..."))   // 默认模型 moonshotai/kimi-k3
+client := nvidia.New(nvidia.WithCaptchaToken("P1_eyJ..."))   // 默认模型 moonshotai/kimi-k3_1-pro
 resp, err := client.Chat(ctx, messages)
 
 // 指定其他注册表模型：
@@ -204,7 +213,7 @@ go run ./cmd/captchapow -sitekey <sitekey> -host <host>
 拿到 token 后直接打一次 predict，并自定义 NVCF 三元组（`nv-function-id` / `{namespace}` / `{slug}`）——token 由纯 Go PoW 现解：
 
 ```bash
-# 注册表模型（默认 moonshotai/kimi-k3）：三元组自动查表
+# 注册表模型（默认 moonshotai/kimi-k3_1-pro）：三元组自动查表
 go run ./cmd/predict -prompt "ping"
 go run ./cmd/predict -model minimaxai/minimax-m3 -v            # -v 打印目标 URL + 求解耗时/难度
 
@@ -213,7 +222,7 @@ go run ./cmd/predict -model acme/new-llm -slug new-llm -function-id <uuid>
 
 # 其他开关
 go run ./cmd/predict -list                                     # 打印已知 namespace/slug/function-id
-go run ./cmd/predict -curl -slug kimi-k3 -function-id <uuid> -captcha "P1_..."   # 只输出等价 curl，不发送
+go run ./cmd/predict -curl -slug kimi-k3_1-pro -function-id <uuid> -captcha "P1_..."   # 只输出等价 curl，不发送
 go run ./cmd/predict -n 2 -stream=false -max-tokens 16          # 连发两次，每次现解一个一次性 token
 ```
 
@@ -256,25 +265,25 @@ go run ./cmd/serve -auto -pool-size=2 -pool-workers=2 -coalesce-ms=0 -max-inflig
 # OpenAI Chat Completions
 curl http://localhost:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"moonshotai/kimi-k3","messages":[{"role":"user","content":"Which is larger, 9.11 or 9.8?"}],"stream":true}'
+  -d '{"model":"moonshotai/kimi-k3_1-pro","messages":[{"role":"user","content":"Which is larger, 9.11 or 9.8?"}],"stream":true}'
 
 # OpenAI Responses
 curl http://localhost:8080/v1/responses \
   -H 'Content-Type: application/json' \
-  -d '{"model":"moonshotai/kimi-k3","input":"Hi","stream":true}'
+  -d '{"model":"moonshotai/kimi-k3_1-pro","input":"Hi","stream":true}'
 
 # Claude Messages
 curl http://localhost:8080/v1/messages \
   -H 'Content-Type: application/json' \
   -H 'anthropic-version: 2023-06-01' \
-  -d '{"model":"moonshotai/kimi-k3","max_tokens":256,"messages":[{"role":"user","content":"Hi"}],"stream":true}'
+  -d '{"model":"moonshotai/kimi-k3_1-pro","max_tokens":256,"messages":[{"role":"user","content":"Hi"}],"stream":true}'
 
 # 池水位（ready/fills/takes/errors/expired）；模型列表见 /v1/models
 curl -s http://localhost:8080/healthz
 ```
 
 - 验证码来源优先级：请求头 `nv-captcha-token` > `-captcha` 一次性 flag（首请求消费后失效）> `-auto` 池（默认 PoW 求解，池空时最多等 `-captcha-wait` 默认 30s 后返回 503）。
-- 指定 NVCF 实例：请求体 `model` 写成 `<function-id>@<model>`（如 `1586112a-925c-48af-8631-7c815dbd749c@moonshotai/kimi-k3`），或直接给 `nv-function-id: <function-id>` 请求头；body 的 pin 优先级高于 header。模型不在注册表/目录里也可以（NVIDIA 有些 function 不出现在 playground 页面但后端可调）：`{"model":"<function-id>@<slug>"}` 经由内部默认模型路由、由 header 携带真实目标，或保持 body 为任意已注册模型、只发 `nv-function-id` + `nv-function-slug`（可选 `nv-function-namespace` 覆盖默认 `qc69jvmznzxy`）两个头。
+- 指定 NVCF 实例：请求体 `model` 写成 `<function-id>@<model>`（如 `b79234a1-64e1-479e-87e7-1c8e3af74262@moonshotai/kimi-k3_1-pro`），或直接给 `nv-function-id: <function-id>` 请求头；body 的 pin 优先级高于 header。模型不在注册表/目录里也可以（NVIDIA 有些 function 不出现在 playground 页面但后端可调）：`{"model":"<function-id>@<slug>"}` 经由内部默认模型路由、由 header 携带真实目标，或保持 body 为任意已注册模型、只发 `nv-function-id` + `nv-function-slug`（可选 `nv-function-namespace` 覆盖默认 `qc69jvmznzxy`）两个头。
 - 上游返回 captcha 形状的 4xx（`Token is invalid` / `hcaptcha` 字样）时自动换新 token 重试，最多 3 次尝试（2 次换新）；池内 token 默认 90s TTL 过期丢弃。
 - 流式优化：关闭 `continuous_usage_stats`、可选 content coalesce（`-coalesce-ms`）；`-max-inflight` 限制并发上游流（默认 8，超限排队等待 `-inflight-wait` 30s 后 503）。
 - 模型目录热刷新：`-model-refresh`（默认 6h；`0` 只启动拉一次；`<0` 关闭）。目录抓取使用 **tls-client 模拟 Chrome 131 的 TLS/HTTP2 指纹**（JA3/JA4 + HTTP/2 SETTINGS），并经代理走固定出口；优先 filtered 列表 URL（40 个候选），被 AWS WAF 挑战时由 **internal/waftoken** 自动求解（挑战页 → challenge.js → V8 解混淆提取 AES 密钥 → 浏览器信号 AES-256-GCM 加密 → 解 PoW（NetworkBandwidth/scrypt/SHA-2）→ POST 换 `aws-waf-token`，纯 Go 无浏览器无 Node），仍失败才回退 unfiltered 页面（24 候选）。Akamai `ak_bmsc`/`bm_mi` 等会话 cookie 由内置 jar 自动吸收并重放。抓取成功后注册表自动持久化到 `-model-cache` JSON（默认 `models_cache.json`，已加入 .gitignore），启动时优先加载，失败/离线也能立即出模型。

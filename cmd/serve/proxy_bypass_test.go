@@ -13,7 +13,7 @@ func TestBypassHostProxyDirect(t *testing.T) {
 	bypass := bypassHostProxy(pf, "https://buildapi.ngc.nvidia.com")
 
 	// predict host -> direct (nil proxy)
-	req := &http.Request{URL: &url.URL{Scheme: "https", Host: "buildapi.ngc.nvidia.com", Path: "/v2/predict/models/x"}}
+	req := &http.Request{URL: &url.URL{Scheme: "https", Host: "buildapi.ngc.nvidia.com", Path: "/v3/predict/stateless/v1/chat/completions"}}
 	got, err := bypass(req)
 	if err != nil {
 		t.Fatal(err)

@@ -1,12 +1,12 @@
 // Package nvidia provides a Go client for NVIDIA Build Playground's anonymous
 // predict API. It is multi-model: requests are routed by model id through the
-// registry in internal/models (default: moonshotai/kimi-k3; z-ai/glm-5.2 was
+// registry in internal/models (default: moonshotai/kimi-k3_1-pro; z-ai/glm-5.2 was
 // removed upstream in 2026-08). Auth is a one-shot P1_ hCaptcha token — minted
 // by the pure-Go PoW solver, or taken from the browser widget.
 //
 // Usage:
 //
-//	client := nvidia.New(nvidia.WithCaptchaToken("P1_...")) // default model: moonshotai/kimi-k3
+//	client := nvidia.New(nvidia.WithCaptchaToken("P1_...")) // default model: moonshotai/kimi-k3_1-pro
 //
 //	// Simple chat
 //	resp, _ := client.Chat(ctx, []Message{{Role: "user", Content: "Hi"}})
@@ -165,15 +165,15 @@ func (e *ErrorResponse) Error() string {
 // --- constants ---
 
 const (
-	// DefaultModel is the default playground model id (the historical
+	// DefaultModel is the default playground model id (kimi-k3 was removed
 	// z-ai/glm-5.2 was removed from NVIDIA's anonymous catalog in 2026-08).
-	DefaultModel = "moonshotai/kimi-k3"
+	DefaultModel = "moonshotai/kimi-k3_1-pro"
 
 	defaultMaxTokens = 16384
 	defaultSeed      = 42
 	defaultTemp      = 1.0
 	// top_p is omitted by default: several 2026-08 catalog models
-	// (e.g. kimi-k3) reject it with 400 from the grpc backend.
+	// (e.g. kimi-k3_1-pro) reject it with 400 from the grpc backend.
 	defaultTopP    = 0.0
 	requestTimeout = 120 * time.Second
 )

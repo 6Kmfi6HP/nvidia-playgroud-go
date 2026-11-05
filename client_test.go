@@ -70,7 +70,7 @@ func TestBuildRequestUsesCaptchaAuthentication(t *testing.T) {
 }
 
 func TestApplyDefaultsSkipsThinkingForUnverifiedModel(t *testing.T) {
-	// The default model (kimi-k3) has no Capability.Thinking hint, so the
+	// The default model (kimi-k3_1-pro) has no Capability.Thinking hint, so the
 	// client must NOT inject chat_template_kwargs (upstream 400s on it).
 	client := New(WithCaptchaToken("t"))
 	req := &ChatRequest{Messages: []Message{{Role: RoleUser, Content: "Hi"}}}
@@ -125,21 +125,21 @@ func TestApplyDefaultsFillsEmptyKwargsWhenExplicit(t *testing.T) {
 	}
 }
 
-// buildRequest must route each model to its own NVCF endpoint + function-id, not
-// a single hardcoded GLM endpoint. Pinned to two concrete registry entries so a
-// future scrape that changes their ids is caught here.
+// buildRequest must route each model via its own nv-function-id on the shared
+// stateless endpoint (since 2026-11 the URL is model-independent). Pinned to
+// two concrete registry entries so a future scrape that changes ids is caught.
 func TestBuildRequestRoutesPerModel(t *testing.T) {
 	client := New(WithCaptchaToken("tok"))
 	cases := map[string]struct {
 		endpoint string
 		fnID     string
 	}{
-		"moonshotai/kimi-k3": {
-			"https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/kimi-k3",
-			"1586112a-925c-48af-8631-7c815dbd749c",
+		"moonshotai/kimi-k3_1-pro": {
+			"https://buildapi.ngc.nvidia.com/v3/predict/stateless/v1/chat/completions",
+			"b79234a1-64e1-479e-87e7-1c8e3af74262",
 		},
 		"deepseek-ai/deepseek-v4-pro-0813": {
-			"https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/deepseek-v4-pro-0813",
+			"https://buildapi.ngc.nvidia.com/v3/predict/stateless/v1/chat/completions",
 			"6e70713f-4eeb-4ef7-b4f8-2d984f4141f6",
 		},
 	}
@@ -215,7 +215,7 @@ func TestBuildRequestAppliesFunctionPin(t *testing.T) {
 // TestBuildRequestPinRejectsMalformedID keeps a typo out of the wire: an empty
 // or unsafe function id must fail locally instead of 400-ing upstream.
 func TestBuildRequestPinRejectsMalformedID(t *testing.T) {
-	for _, model := range []string{"@moonshotai/kimi-k3", pinnedBadID + "@moonshotai/kimi-k3", "4f1a2b3c-0000-4000-8000-000000000001@"} {
+	for _, model := range []string{"@moonshotai/kimi-k3_1-pro", pinnedBadID + "@moonshotai/kimi-k3_1-pro", "4f1a2b3c-0000-4000-8000-000000000001@"} {
 		client := New(WithCaptchaToken("t"), WithModel(model))
 		if _, err := client.buildRequest(context.Background(), &ChatRequest{Model: model, Messages: []Message{{Role: RoleUser, Content: "Hi"}}}); err == nil {
 			t.Errorf("buildRequest(%q) error = nil, want a client error", model)
@@ -242,7 +242,7 @@ func TestBuildRequestModelInfoOverrideWins(t *testing.T) {
 	if got := httpReq.Header.Get("nv-function-id"); got != "override-id" {
 		t.Errorf("nv-function-id = %q, want the explicit override", got)
 	}
-	if want := "https://buildapi.ngc.nvidia.com/v2/predict/models/ns/sl"; httpReq.URL.String() != want {
+	if want := "https://buildapi.ngc.nvidia.com/v3/predict/stateless/v1/chat/completions"; httpReq.URL.String() != want {
 		t.Errorf("URL = %q, want %q", httpReq.URL.String(), want)
 	}
 	body, err := io.ReadAll(httpReq.Body)
