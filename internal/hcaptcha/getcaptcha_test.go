@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -408,5 +409,243 @@ func TestCaptchaAttemptsEncGate(t *testing.T) {
 	}
 	if solve.N == "" {
 		t.Error("solve.N empty, want the solved n")
+	}
+}
+
+// encReissueEnv installs the encrypted-only offline environment the re-issue
+// tests share: the speculative/phase-A claim answers with claimJWT; the
+// plaintext variants must never be reached.
+func encReissueEnv(t *testing.T, claimJWT string) (cleanup func()) {
+	t.Helper()
+	_, _, cleanup = offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
+		if params["n"] == "" && params["c"] == "" {
+			return 200, []byte(`{"c":{"type":"hsw","req":"` + claimJWT + `"}}`), nil
+		}
+		t.Errorf("plaintext variant reached on enc fast path: %v", params)
+		return 200, []byte(`{"pass":false}`), nil
+	})
+	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, bool, error) {
+		return "", "", "", true, nil
+	}
+	return cleanup
+}
+
+// wireSpecJWT decodes the [spec, cipher] wire body and returns the spec's
+// challenge jwt, failing the octet fake when the wire is malformed.
+func wireSpecJWT(body []byte) (string, error) {
+	v, rest, err := msgpackDecode(body)
+	if err != nil {
+		return "", err
+	}
+	arr, ok := v.([]any)
+	if !ok || len(arr) != 2 || len(rest) != 0 {
+		return "", errors.New("wire is not [spec, cipher]")
+	}
+	spec, ok := arr[0].(string)
+	if !ok {
+		return "", errors.New("wire spec is not a string")
+	}
+	var doc struct {
+		Req string `json:"req"`
+	}
+	if err := json.Unmarshal([]byte(spec), &doc); err != nil || doc.Req == "" {
+		return "", fmt.Errorf("wire spec %s carries no req", spec)
+	}
+	return doc.Req, nil
+}
+
+// encryptedPasscodeBody builds the wasm-answer shape the decrypt path
+// expects: a msgpack map carrying the passcode.
+func encryptedPasscodeBody(tok string) []byte {
+	resp := msgpackEncodeMapString(map[string]string{"pass": "true"})
+	return appendMsgpackKV(resp, "generated_pass_UUID", tok)
+}
+
+// TestCaptchaTokenEncryptedReissueLoop verifies the re-issued-challenge
+// ladder: a submission answered with a fresh hsw challenge (the server
+// rejecting the proof — datacenter exits hit this when the assigned bundle
+// variant rotates under them) must be re-solved with the new challenge's own
+// bundle and resubmitted, yielding the passcode on the second round.
+func TestCaptchaTokenEncryptedReissueLoop(t *testing.T) {
+	const tok = "P1_eyJyZWlzc3VlLnRva2VuIn0.offline"
+	jwt1 := fakeJWT(t, "/c/enc-reissue-loc-1")
+	jwt2 := fakeJWT(t, "/c/enc-reissue-loc-2")
+	cleanup := encReissueEnv(t, jwt1)
+	defer cleanup()
+
+	oldOctet := postGetCaptchaOctetFn
+	defer func() { postGetCaptchaOctetFn = oldOctet }()
+	calls := 0
+	postGetCaptchaOctetFn = func(ctx context.Context, sitekey string, body []byte) (int, []byte, error) {
+		calls++
+		gotJWT, err := wireSpecJWT(body)
+		if err != nil {
+			return 0, nil, err
+		}
+		switch calls {
+		case 1:
+			if gotJWT != jwt1 {
+				return 0, nil, fmt.Errorf("round 1 submitted jwt %q, want the claimed one", gotJWT)
+			}
+			// Proof rejected: the server answers with a fresh challenge as
+			// plaintext JSON, exactly like the live datacenter flow.
+			return 200, []byte(`{"c":{"type":"hsw","req":"` + jwt2 + `"}}`), nil
+		case 2:
+			if gotJWT != jwt2 {
+				return 0, nil, fmt.Errorf("round 2 submitted jwt %q, want the re-issued one", gotJWT)
+			}
+			return 200, encryptedPasscodeBody(tok), nil
+		default:
+			return 0, nil, fmt.Errorf("unexpected octet call %d", calls)
+		}
+	}
+
+	solve, attempts, err := CaptchaAttempts(context.Background(), "sitekey", "host")
+	if err != nil {
+		t.Fatalf("CaptchaAttempts (reissue loop): %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %d, want 1 (the loop stays inside the encrypted attempt)", len(attempts))
+	}
+	if attempts[0].Token != tok {
+		t.Errorf("attempt token = %q, want %q", attempts[0].Token, tok)
+	}
+	if attempts[0].Name != "encrypted-r2" {
+		t.Errorf("attempt name = %q, want encrypted-r2", attempts[0].Name)
+	}
+	if solve.JWT != jwt2 {
+		t.Errorf("solve.JWT = %q, want the re-issued jwt", solve.JWT)
+	}
+	if calls != 2 {
+		t.Errorf("octet calls = %d, want 2", calls)
+	}
+}
+
+// TestCaptchaTokenEncryptedReissueExhausted verifies the ladder's bound: a
+// server that keeps re-issuing challenges must not be followed forever; the
+// attempt fails with a classified error after maxEncryptedRounds.
+func TestCaptchaTokenEncryptedReissueExhausted(t *testing.T) {
+	jwts := []string{
+		fakeJWT(t, "/c/enc-exhaust-loc-1"),
+		fakeJWT(t, "/c/enc-exhaust-loc-2"),
+		fakeJWT(t, "/c/enc-exhaust-loc-3"),
+	}
+	cleanup := encReissueEnv(t, jwts[0])
+	defer cleanup()
+
+	oldOctet := postGetCaptchaOctetFn
+	defer func() { postGetCaptchaOctetFn = oldOctet }()
+	calls := 0
+	postGetCaptchaOctetFn = func(ctx context.Context, sitekey string, body []byte) (int, []byte, error) {
+		defer func() { calls++ }()
+		if calls >= len(jwts) {
+			return 200, []byte(`{"c":{"type":"hsw","req":"` + jwts[len(jwts)-1] + `"}}`), nil
+		}
+		return 200, []byte(`{"c":{"type":"hsw","req":"` + jwts[calls] + `"}}`), nil
+	}
+
+	_, attempts, err := CaptchaAttempts(context.Background(), "sitekey", "host")
+	if err != nil {
+		t.Fatalf("CaptchaAttempts (exhausted): %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %d, want 1", len(attempts))
+	}
+	if attempts[0].Err == nil ||
+		!strings.Contains(attempts[0].Err.Error(), "re-issued a fresh challenge") {
+		t.Errorf("attempt err = %v, want re-issue exhaustion message", attempts[0].Err)
+	}
+	if calls != maxEncryptedRounds {
+		t.Errorf("octet calls = %d, want %d", calls, maxEncryptedRounds)
+	}
+	if attempts[0].Name != fmt.Sprintf("encrypted-r%d", maxEncryptedRounds) {
+		t.Errorf("attempt name = %q, want encrypted-r%d", attempts[0].Name, maxEncryptedRounds)
+	}
+}
+
+// TestCaptchaTokenEncryptedReissueNonHsw verifies the classified stop: when
+// the re-issued challenge is not a PoW (an image task), the loop must stop
+// instead of trying to solve a different challenge kind.
+func TestCaptchaTokenEncryptedReissueNonHsw(t *testing.T) {
+	jwt1 := fakeJWT(t, "/c/enc-nonhsw-loc")
+	cleanup := encReissueEnv(t, jwt1)
+	defer cleanup()
+
+	oldOctet := postGetCaptchaOctetFn
+	defer func() { postGetCaptchaOctetFn = oldOctet }()
+	calls := 0
+	postGetCaptchaOctetFn = func(ctx context.Context, sitekey string, body []byte) (int, []byte, error) {
+		calls++
+		return 200, []byte(`{"c":{"type":"getImage","req":"` + jwt1 + `"}}`), nil
+	}
+
+	_, attempts, err := CaptchaAttempts(context.Background(), "sitekey", "host")
+	if err != nil {
+		t.Fatalf("CaptchaAttempts (non-hsw): %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %d, want 1", len(attempts))
+	}
+	if attempts[0].Err == nil ||
+		!strings.Contains(attempts[0].Err.Error(), "getImage") ||
+		!strings.Contains(attempts[0].Err.Error(), "re-issued") {
+		t.Errorf("attempt err = %v, want a re-issued \"getImage\" classification", attempts[0].Err)
+	}
+	if calls != 1 {
+		t.Errorf("octet calls = %d, want 1 (loop must stop at the non-hsw re-issue)", calls)
+	}
+}
+
+// TestCaptchaTokenRotatesConnectionsOnFailure verifies the failure-rotation
+// contract: an extraction that yields no passcode must close the pipeline's
+// idle connections (so the next attempt dials a fresh proxy exit), while a
+// successful extraction must keep them warm.
+func TestCaptchaTokenRotatesConnectionsOnFailure(t *testing.T) {
+	oldReset := resetConns
+	defer func() { resetConns = oldReset }()
+	rotated := 0
+	resetConns = func() { rotated++ }
+
+	// Failure path: no passcode from any variant.
+	_, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
+		return http.StatusBadRequest, []byte(`{"pass":false}`), nil
+	})
+	defer cleanup()
+	_, err := CaptchaToken(context.Background(), "sitekey", "host")
+	if err == nil {
+		t.Fatal("CaptchaToken succeeded, want failure")
+	}
+	if rotated != 1 {
+		t.Errorf("rotations after failure = %d, want 1", rotated)
+	}
+
+	// Success path: connection stays warm.
+	_, _, cleanup2 := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
+		return 200, []byte(`{"pass":true,"generated_pass_UUID":"P1_eyJ3YXJtLmNvbm4ifQ.offline"}`), nil
+	})
+	defer cleanup2()
+	rotated = 0
+	tok, err := CaptchaToken(context.Background(), "sitekey", "host")
+	if err != nil {
+		t.Fatalf("CaptchaToken (success path): %v", err)
+	}
+	if tok == "" {
+		t.Fatal("CaptchaToken returned empty token on success")
+	}
+	if rotated != 0 {
+		t.Errorf("rotations after success = %d, want 0 (a working exit stays warm)", rotated)
+	}
+
+	// A context-canceled failure is the caller unwinding, not a bad exit:
+	// no rotation.
+	rotated = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = CaptchaToken(ctx, "sitekey", "host")
+	if err == nil {
+		t.Fatal("CaptchaToken succeeded on canceled context, want failure")
+	}
+	if rotated != 0 {
+		t.Errorf("rotations after context cancel = %d, want 0", rotated)
 	}
 }

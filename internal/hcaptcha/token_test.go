@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"strconv"
@@ -294,5 +296,59 @@ func TestLiveCaptchaToken(t *testing.T) {
 	if token == "" || solve.JWT == "" || solve.Fingerprint == "" || solve.Location == "" {
 		t.Fatalf("incomplete solve results: token=%d jwt=%d fpB64=%d location=%q",
 			len(token), len(solve.JWT), len(solve.Fingerprint), solve.Location)
+	}
+}
+
+// TestSolverForBrokenBundleFailFast verifies the broken-bundle negative
+// cache: a location whose bundle fails to evaluate (hsw.ErrBundleBroken —
+// the compile-poison variants hCaptcha serves to datacenter exits) is
+// marked, and the next assignment of the same location short-circuits
+// without paying another download+eval cycle. Transport errors do not mark.
+func TestSolverForBrokenBundleFailFast(t *testing.T) {
+	defer CloseSolvers()
+	oldLoad := loadSolver
+	defer func() { loadSolver = oldLoad }()
+
+	loads := 0
+	loadSolver = func(ctx context.Context, location string) (*hsw.Solver, error) {
+		loads++
+		return nil, fmt.Errorf("%w: eval hsw.js: CompileError: fake poison wasm", hsw.ErrBundleBroken)
+	}
+
+	const loc = "/c/broken-variant-loc"
+	_, err1 := solverFor(context.Background(), loc)
+	if err1 == nil || !strings.Contains(err1.Error(), "CompileError") {
+		t.Fatalf("first load err = %v, want the eval CompileError", err1)
+	}
+	if !bundleBroken(loc) {
+		t.Fatal("location not marked broken after ErrBundleBroken eval failure")
+	}
+	_, err2 := solverFor(context.Background(), loc)
+	if err2 == nil || !strings.Contains(err2.Error(), "marked broken") {
+		t.Fatalf("second load err = %v, want the fail-fast cache hit", err2)
+	}
+	if loads != 1 {
+		t.Errorf("loadSolver calls = %d, want 1 (second hit must short-circuit)", loads)
+	}
+
+	// A plain transport error must not mark the location.
+	loadSolver = func(ctx context.Context, location string) (*hsw.Solver, error) {
+		loads++
+		return nil, errors.New("dial tcp: connection refused")
+	}
+	const loc2 = "/c/transient-loc"
+	_, err3 := solverFor(context.Background(), loc2)
+	if err3 == nil {
+		t.Fatal("transient load unexpectedly succeeded")
+	}
+	if bundleBroken(loc2) {
+		t.Error("transport failure marked the bundle broken, want unmarked")
+	}
+	_, err4 := solverFor(context.Background(), loc2)
+	if err4 == nil {
+		t.Fatal("transient retry unexpectedly succeeded")
+	}
+	if loads != 3 {
+		t.Errorf("loadSolver calls = %d, want 3 (transient failures keep retrying the load)", loads)
 	}
 }

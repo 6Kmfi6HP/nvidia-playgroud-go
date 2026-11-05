@@ -46,6 +46,12 @@ var hswClient = &http.Client{Timeout: httpTimeout}
 // through the upstream proxy. Must be called before solving starts.
 func SetHTTPClient(c *http.Client) { hswClient = c }
 
+// ResetConnections closes every idle upstream connection, so the next
+// request dials fresh. Through a rotating proxy pool each new connection
+// carries a new exit IP; callers use this to abandon a risk-flagged exit
+// after a failed solve. No-op when no idle connections are held.
+func ResetConnections() { hswClient.CloseIdleConnections() }
+
 var (
 	// reWindowHSW matches the v1 bundle tail: window.hsw = function(...)...
 	reWindowHSW = regexp.MustCompile(`window\.hsw\s*=`)
