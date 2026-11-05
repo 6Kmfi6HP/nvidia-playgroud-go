@@ -9,3 +9,7 @@ scripts
 *.exe
 *.test
 *.out
+.venv
+.tmp
+serve
+models_cache.json

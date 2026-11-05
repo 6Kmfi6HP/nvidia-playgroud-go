@@ -140,8 +140,6 @@ func Replace(m map[string]ModelInfo) {
 
 // Lookup returns the ModelInfo for a model id ("publisher/slug").
 // The empty string resolves to DefaultModel.
-// Lookup returns the ModelInfo for a model id ("publisher/slug").
-// The empty string resolves to DefaultModel.
 func Lookup(model string) (ModelInfo, error) {
 	if model == "" {
 		model = DefaultModel
