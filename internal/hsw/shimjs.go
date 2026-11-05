@@ -14,13 +14,26 @@ const shimTemplate = `// hsw shim: minimal browser environment for hCaptcha hsw.
 //       TextDecoder and a fetch mock that serves the embedded base64 WASM.
 // The shim covers the union of both. V8 supplies Date/Math/JSON/Promise/
 // WebAssembly/Proxy/Uint8Array; everything else below has to be provided.
+//
+// 2026-11 hsw bundles probe the environment inside their WASM state machine.
+// The probe gates the proof-of-work on "self instanceof window.Window" (import
+// a.gb), then walks browser globals (performance.now, screen, document.referrer,
+// element.hasAttribute, Request/RTCPeerConnection/OfflineAudioContext/Notification).
+// When the instanceof check fails, headless runtimes fall into an impossible
+// state that leaves the solve promise pending forever (or traps on unreachable).
+// The shim therefore defines a real Window constructor and puts the shim
+// window on its prototype chain, plus the constructor stubs the probe reads.
 
+function Window() {}
 var window = {};
+Object.setPrototypeOf(window, Window.prototype);
+window.Window = Window;
 var module = { exports: {} };
 self = window;
 globalThis.window = window;
 globalThis.self = window;
 globalThis.module = module;
+globalThis.Window = Window;
 
 if (typeof console === "undefined") {
   console = { log: function(){}, info: function(){}, warn: function(){}, error: function(){}, debug: function(){}, trace: function(){} };
@@ -236,6 +249,12 @@ function __hswEl() {
     setAttribute: function(k, v) { this.attributes[k] = String(v); },
     getAttribute: function(k) { return Object.prototype.hasOwnProperty.call(this.attributes, k) ? this.attributes[k] : null; },
     removeAttribute: function(k) { delete this.attributes[k]; },
+    hasAttribute: function(k) { return Object.prototype.hasOwnProperty.call(this.attributes, k); },
+    hasAttributeNS: function() { return false; },
+    getAttributeNode: function(k) { return Object.prototype.hasOwnProperty.call(this.attributes, k) ? { name: k, value: this.attributes[k] } : null; },
+    toggleAttribute: function() { return false; },
+    getClientRects: function() { return []; },
+    scroll: function() {},
     appendChild: function(c) { this.children.push(c); c.parentNode = this; return c; },
     removeChild: function(c) { var i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); return c; },
     insertBefore: function(c, ref) { this.children.push(c); c.parentNode = this; return c; },
@@ -436,6 +455,31 @@ if (typeof Blob === "undefined") {
   Blob.prototype.stream = function() { return null; };
 }
 
+// ---- probed constructors (2026-11 wasm env-probe) ----
+// The hsw WASM reads these off the global object to fingerprint the runtime.
+// Real Chrome has all of them; absence is a strong headless signal.
+if (typeof Request === "undefined") { Request = function Request(){}; }
+if (typeof Response === "undefined") { Response = function Response(){}; }
+if (typeof Headers === "undefined") { Headers = function Headers(){}; }
+if (typeof OfflineAudioContext === "undefined") {
+  OfflineAudioContext = function OfflineAudioContext(){};
+  OfflineAudioContext.prototype.startRendering = function() { return Promise.resolve({ getChannelData: function() { return new Float32Array(0); } }); };
+}
+if (typeof AudioContext === "undefined") { AudioContext = function AudioContext(){}; }
+if (typeof RTCPeerConnection === "undefined") {
+  RTCPeerConnection = function RTCPeerConnection(){};
+  RTCPeerConnection.prototype.createDataChannel = function() { return {}; };
+  RTCPeerConnection.prototype.close = function() {};
+}
+if (typeof Notification === "undefined") {
+  Notification = function Notification(){};
+  Notification.permission = "default";
+  Notification.requestPermission = function() { return Promise.resolve("default"); };
+}
+if (typeof OffscreenCanvas === "undefined") {
+  OffscreenCanvas = function OffscreenCanvas(){};
+}
+
 // ---- expose the environment on window ----
 window.navigator = navigator;
 window.document = document;
@@ -460,6 +504,19 @@ window.innerWidth = innerWidth;
 window.innerHeight = innerHeight;
 window.outerWidth = outerWidth;
 window.outerHeight = outerHeight;
+window.Request = Request;
+window.Response = Response;
+window.Headers = Headers;
+window.OfflineAudioContext = OfflineAudioContext;
+window.AudioContext = AudioContext;
+window.RTCPeerConnection = RTCPeerConnection;
+window.Notification = Notification;
+window.OffscreenCanvas = OffscreenCanvas;
+window.addEventListener = function(){};
+window.removeEventListener = function(){};
+window.queueMicrotask = queueMicrotask;
+window.atob = atob;
+window.btoa = btoa;
 `
 
 // buildShim returns the wrapper script: environment shim + patched bundle +
