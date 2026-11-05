@@ -117,12 +117,35 @@ func main() {
 	}
 
 	// Route the pure-Go PoW solver's own HTTP traffic (checksiteconfig, hsw.js
-	// download, getcaptcha exchange) and the model-catalog scraper through
-	// the upstream proxy (predict API itself stays direct via bypassHostProxy).
-	// Each package keeps its own overall request timeout.
-	hcaptcha.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: transport})
-	hsw.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: transport})
+	// download, getcaptcha exchange) through a dedicated sticky transport:
+	// MaxConnsPerHost 1 pins every api.hcaptcha.com request of a solve
+	// (checksiteconfig, phase-A claim, submission) to one upstream connection.
+	// Rotating-proxy pools assign a fresh exit IP per new TCP connection, so
+	// without the pin a single solve drifts across exits mid-flow and the
+	// server's (IP, sitekey, challenge-chain) risk binding rejects otherwise
+	// valid proofs as foreign submissions. HTTP/2 multiplexes concurrent
+	// requests over the pinned connection; with HTTP/1.1 the speculative claim
+	// queues behind checksiteconfig for a few seconds — acceptable either way.
+	// The model-catalog scraper keeps the high-concurrency transport above.
+	captchaTransport := &http.Transport{
+		Proxy: proxyFunc,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          4,
+		MaxIdleConnsPerHost:   2,
+		MaxConnsPerHost:       1,
+		IdleConnTimeout:       120 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+	}
+	hcaptcha.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: captchaTransport})
+	hsw.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: captchaTransport})
 	models.SetHTTPClient(&http.Client{Timeout: 30 * time.Second, Transport: transport})
+
 	tlsOpts := []tlsclient.HttpClientOption{
 		tlsclient.WithClientProfile(tlsprofiles.Chrome_131),
 		tlsclient.WithTimeoutSeconds(30),

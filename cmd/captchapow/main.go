@@ -56,14 +56,27 @@ func run() error {
 	// Wire the whole captcha pipeline through -proxy when given: the exit
 	// IP decides which hsw bundle location checksiteconfig assigns, so
 	// diagnosing datacenter delivery requires the proxy on every stage.
+	// MaxConnsPerHost 1 mirrors cmd/serve's sticky captcha transport: rotating
+	// proxy pools give each new TCP connection a fresh exit IP, and a solve
+	// drifting across exits mid-flow is rejected as a foreign submission.
 	if *proxy != "" {
 		u, perr := url.Parse(*proxy)
 		if perr != nil {
 			return fmt.Errorf("parse proxy url: %w", perr)
 		}
 		client := &http.Client{
-			Timeout:   60 * time.Second,
-			Transport: &http.Transport{Proxy: http.ProxyURL(u), ForceAttemptHTTP2: true},
+			Timeout: 60 * time.Second,
+			Transport: &http.Transport{
+				Proxy:                 http.ProxyURL(u),
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          4,
+				MaxIdleConnsPerHost:   2,
+				MaxConnsPerHost:       1,
+				IdleConnTimeout:       120 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+				ResponseHeaderTimeout: 60 * time.Second,
+			},
 		}
 		hcaptcha.SetHTTPClient(client)
 		hsw.SetHTTPClient(client)
