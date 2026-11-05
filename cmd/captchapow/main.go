@@ -15,12 +15,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"time"
 	"unicode/utf8"
 
 	nvidia "nvidia-playgroud-go"
 	"nvidia-playgroud-go/internal/hcaptcha"
+	"nvidia-playgroud-go/internal/hsw"
 )
 
 // defaultSitekey and defaultHost are the build.nvidia.com playground widget
@@ -45,8 +48,29 @@ func run() error {
 	verbose := flag.Bool("v", false, "print per-stage and per-variant diagnostics")
 	raw := flag.Bool("raw", false, "print full getcaptcha response bodies")
 	verify := flag.Bool("verify", false, "after obtaining a token, send one upstream request with it")
+	proxy := flag.String("proxy", "", "proxy URL (socks5:// or http://) routing checksiteconfig, hsw.js downloads and getcaptcha submissions")
+	pinLocation := flag.String("pin-location", "", "solve with this hsw.js bundle location instead of the challenge JWT's assigned one (cross-variant compatibility test)")
 	timeout := flag.Duration("timeout", 180*time.Second, "total timeout")
 	flag.Parse()
+
+	// Wire the whole captcha pipeline through -proxy when given: the exit
+	// IP decides which hsw bundle location checksiteconfig assigns, so
+	// diagnosing datacenter delivery requires the proxy on every stage.
+	if *proxy != "" {
+		u, perr := url.Parse(*proxy)
+		if perr != nil {
+			return fmt.Errorf("parse proxy url: %w", perr)
+		}
+		client := &http.Client{
+			Timeout:   60 * time.Second,
+			Transport: &http.Transport{Proxy: http.ProxyURL(u), ForceAttemptHTTP2: true},
+		}
+		hcaptcha.SetHTTPClient(client)
+		hsw.SetHTTPClient(client)
+	}
+	if *pinLocation != "" {
+		hcaptcha.SetPinnedBundleLocation(*pinLocation)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()

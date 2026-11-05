@@ -38,6 +38,15 @@ const (
 	backoffFactor = 2
 )
 
+// ErrBundleBroken marks failures attributable to the bundle itself — it
+// fails to evaluate (compile-poisoned wasm, the datacenter-IP delivery
+// hCaptcha uses against headless solvers) or its proof of work never
+// settles (environment-probe traps looping forever). Transport-level
+// download errors do not wrap it, so callers can fail fast on repeated
+// assignment of the same broken variant instead of paying a full
+// eval/timeout cycle every time.
+var ErrBundleBroken = errors.New("hsw: bundle broken")
+
 // Solver encapsulates an isolate running a prepared hsw bundle.
 type Solver struct {
 	mu       sync.Mutex
@@ -88,7 +97,7 @@ func (s *Solver) init() error {
 		name = "hsw.js"
 	}
 	if _, err := s.vctx.RunScript(s.bundle.Source, name); err != nil {
-		return fmt.Errorf("hsw: eval %s: %w", name, jsErr(err))
+		return fmt.Errorf("%w: eval %s: %w", ErrBundleBroken, name, jsErr(err))
 	}
 
 	// Hold the global object handle for the solver's lifetime: every v8go
@@ -232,7 +241,7 @@ func (s *Solver) SolveN(ctx context.Context, jwt, fpB64 string) (string, error) 
 		wait := spinInterval
 		for p.State() == v8.Pending {
 			if deadline.Err() != nil {
-				return "", fmt.Errorf("hsw: solve timed out after %s", DefaultSolveTimeout)
+				return "", fmt.Errorf("%w: solve timed out after %s", ErrBundleBroken, DefaultSolveTimeout)
 			}
 			s.vctx.PerformMicrotaskCheckpoint()
 			if p.State() == v8.Pending {
@@ -356,7 +365,7 @@ func (s *Solver) Crypto(ctx context.Context, mode int, data []byte) ([]byte, err
 		wait := spinInterval
 		for p.State() == v8.Pending {
 			if deadline.Err() != nil {
-				return nil, fmt.Errorf("hsw: crypto mode %d timed out after %s", mode, DefaultSolveTimeout)
+				return nil, fmt.Errorf("%w: crypto mode %d timed out after %s", ErrBundleBroken, mode, DefaultSolveTimeout)
 			}
 			s.vctx.PerformMicrotaskCheckpoint()
 			if p.State() == v8.Pending {

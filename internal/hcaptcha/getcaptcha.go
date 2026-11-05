@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"nvidia-playgroud-go/internal/hcaptchapow"
 	"nvidia-playgroud-go/internal/hsw"
@@ -96,15 +97,43 @@ type CaptchaAttempt struct {
 }
 
 // Summary renders one attempt for diagnostics: name, HTTP status, transport
-// error and the raw response body clipped to 800 characters.
+// error and the raw response body clipped to 800 characters. Binary bodies
+// (the wasm-encrypted getcaptcha answers) collapse to a size note so
+// aggregated error strings stay log-readable.
 func (a *CaptchaAttempt) Summary() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "variant %s: status=%d elapsed=%s", a.Name, a.Status, a.Elapsed.Round(time.Millisecond))
 	if a.Err != nil {
 		fmt.Fprintf(&sb, " err=%v", a.Err)
 	}
-	fmt.Fprintf(&sb, " body=%s", clipBytes(a.Body))
+	fmt.Fprintf(&sb, " body=%s", summarizeBody(a.Body))
 	return sb.String()
+}
+
+// summarizeBody clips a text body for diagnostics and collapses binary
+// (wasm-encrypted) bodies to a size note.
+func summarizeBody(b []byte) string {
+	if !isTextBody(b) {
+		if len(b) == 0 {
+			return ""
+		}
+		return fmt.Sprintf("(binary body, %d bytes)", len(b))
+	}
+	return clipBytes(b)
+}
+
+// isTextBody reports whether b is valid UTF-8 free of control characters that
+// would break terminal/log rendering.
+func isTextBody(b []byte) bool {
+	if !utf8.Valid(b) {
+		return false
+	}
+	for _, c := range b {
+		if c < 0x20 && c != '\n' && c != '\t' && c != '\r' {
+			return false
+		}
+	}
+	return true
 }
 
 // FindP1Token scans a getcaptcha response body for an hCaptcha passcode.
@@ -396,6 +425,7 @@ func CaptchaAttempts(ctx context.Context, sitekey, host string) (solve SolveInfo
 	}
 	n, err := solver.SolveN(ctx, jwt, fpB64)
 	if err != nil {
+		markBundleBroken(location, err)
 		return SolveInfo{JWT: jwt, Location: location, Key: key, Fingerprint: fpB64}, nil,
 			fmt.Errorf("hcaptcha: getcaptcha: solve: %w", err)
 	}
@@ -440,12 +470,22 @@ func CaptchaAttempts(ctx context.Context, sitekey, host string) (solve SolveInfo
 // submission: phase-A claim via getcaptcha (no n), solve the claimed jwt,
 // encrypt the params and submit the [spec, ext18(cipher)] wire.
 //
+// The submission is a bounded loop, not a single shot. hCaptcha rotates hsw
+// bundle variants by exit-IP reputation (a datacenter exit is assigned a
+// different location on nearly every claim), and a submission the server
+// will not accept is answered with a fresh challenge — a plaintext (or
+// decrypted) {"c":{"type":"hsw","req":<new jwt>}} — instead of a passcode.
+// The widget flow solves the new challenge and submits again; this loop
+// follows it, up to maxEncryptedRounds rounds, re-deriving the solver from
+// each new challenge's own bundle location. Challenges of any other type
+// are not solvable headless and fail with a classified error.
+//
 // claim, when non-nil, is a pre-fetched phase-A claim (the speculative one
 // fired at t=0); when nil a fresh claim is POSTed. The solver is derived from
 // the claimed challenge's own bundle location, so this path is independent of
-// the checksiteconfig challenge. The returned SolveInfo describes the claimed
-// challenge (JWT/location/fingerprint/n) so callers can surface its decode
-// timing and difficulty.
+// the checksiteconfig challenge. The returned SolveInfo describes the last
+// solved challenge (JWT/location/fingerprint/n) so callers can surface its
+// decode timing and difficulty.
 func runEncryptedAttempt(ctx context.Context, sitekey, host string, claim *claimResult) (at CaptchaAttempt, info SolveInfo) {
 	params := map[string]string{
 		"v":       getCaptchaVersion,
@@ -471,95 +511,159 @@ func runEncryptedAttempt(ctx context.Context, sitekey, host string, claim *claim
 		at.Err = fmt.Errorf("hcaptcha: getcaptcha: claim: %w", err)
 		return
 	}
-	spec, jwt, perr := specFromClaim(claimBody)
+	spec, jwt, ctype, perr := specFromClaim(claimBody)
 	if perr != nil {
 		at.Err = fmt.Errorf("hcaptcha: getcaptcha: claim: %w", perr)
 		return
 	}
+	if ctype != "" && ctype != "hsw" {
+		at.Err = fmt.Errorf("hcaptcha: getcaptcha: server issued %q challenge (only hsw is solvable headless)", ctype)
+		return
+	}
 
-	// Solve the claimed challenge with the in-process pipeline. The solver is
-	// keyed by the claimed JWT's own bundle location.
-	location, perr := hsw.LocationFromJWT(jwt)
-	if perr != nil {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: claim location: %w", perr)
-		return
-	}
-	solver, perr := solverFor(ctx, location)
-	if perr != nil {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: load solver: %w", perr)
-		return
-	}
-	pow, perr := hcaptchapow.ParsePow(jwt)
-	if perr != nil {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: parse claimed pow: %w", perr)
-		return
-	}
-	fpB64, perr := BuildFingerprint(pow)
-	if perr != nil {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: build claimed fingerprint: %w", perr)
-		return
-	}
-	n, perr := solver.SolveN(ctx, jwt, fpB64)
-	if perr != nil {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: solve claimed challenge: %w", perr)
-		return
-	}
-	info = SolveInfo{JWT: jwt, Location: location, Fingerprint: fpB64, N: n}
+	for round := 1; round <= maxEncryptedRounds; round++ {
+		if round > 1 {
+			at.Name = fmt.Sprintf("encrypted-r%d", round)
+		}
+		if ctx.Err() != nil {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: context done: %w", ctx.Err())
+			return
+		}
 
-	sub := map[string]string{"n": n}
-	for k, v := range params {
-		sub[k] = v
-	}
-	at.Params = sub
-	plain := msgpackEncodeMapString(sub)
-	cipher, cerr := solver.Crypto(ctx, 1, plain)
-	if cerr != nil {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: encrypt: %w", cerr)
+		// Solve the current challenge with the in-process pipeline. The solver
+		// is keyed by the challenge JWT's own bundle location: the proof of
+		// work is bundle-variant-bound (solving with a different variant's
+		// wasm yields an n the server rejects with another challenge).
+		location, perr := hsw.LocationFromJWT(jwt)
+		if perr != nil {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: claim location: %w", perr)
+			return
+		}
+		solver, perr := solverFor(ctx, location)
+		if perr != nil {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: load solver: %w", perr)
+			return
+		}
+		pow, perr := hcaptchapow.ParsePow(jwt)
+		if perr != nil {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: parse claimed pow: %w", perr)
+			return
+		}
+		fpB64, perr := BuildFingerprint(pow)
+		if perr != nil {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: build claimed fingerprint: %w", perr)
+			return
+		}
+		n, perr := solver.SolveN(ctx, jwt, fpB64)
+		if perr != nil {
+			markBundleBroken(location, perr)
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: solve claimed challenge: %w", perr)
+			return
+		}
+		info = SolveInfo{JWT: jwt, Location: location, Fingerprint: fpB64, N: n}
+
+		// The encrypted wire's wasm key is bundle-specific: encrypt/decrypt must
+		// run in the ASSIGNED variant even when the PoW solve was redirected to
+		// a pinned known-good bundle.
+		cryptoSolver := solver
+		if pinOverrides(location) {
+			cryptoSolver, perr = solverForExact(ctx, location)
+			if perr != nil {
+				at.Err = fmt.Errorf("hcaptcha: getcaptcha: load assigned bundle for crypto: %w", perr)
+				return
+			}
+		}
+
+		sub := map[string]string{"n": n}
+		for k, v := range params {
+			sub[k] = v
+		}
+		at.Params = sub
+		plain := msgpackEncodeMapString(sub)
+		cipher, cerr := cryptoSolver.Crypto(ctx, 1, plain)
+		if cerr != nil {
+			markBundleBroken(location, cerr)
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: encrypt: %w", cerr)
+			return
+		}
+		body := msgpackEncodeWire(spec, cipher)
+		status, resp, err := postGetCaptchaOctetFn(ctx, sitekey, body)
+		at.Status, at.Body = status, resp
+		if err != nil {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: %w", err)
+			return
+		}
+
+		// Case 1: a plain-text passcode (some backend generations answer
+		// unencrypted even on the octet wire).
+		if at.Token = FindP1Token(resp); at.Token != "" {
+			return
+		}
+		// Case 2: the proof was rejected — the server answers with a fresh
+		// challenge that the widget flow solves and resubmits. Follow it.
+		if spec2, jwt2, ctype2, ok := reissuedChallenge(resp); ok {
+			if ctype2 != "" && ctype2 != "hsw" {
+				at.Err = fmt.Errorf("hcaptcha: getcaptcha: server re-issued %q challenge (not solvable via PoW)", ctype2)
+				return
+			}
+			spec, jwt = spec2, jwt2
+			continue
+		}
+		if status != http.StatusOK {
+			return
+		}
+		// Case 3: a 200 answer to an encrypted submission is the wasm-encrypted
+		// response; decrypt (mode 0) and msgpack-decode before scanning for a
+		// passcode. The decrypted answer may itself be a re-issued challenge.
+		dec, derr := cryptoSolver.Crypto(ctx, 0, resp)
+		if derr != nil {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: decrypt: %w", derr)
+			return
+		}
+		msg, rest, merr := msgpackDecode(dec)
+		if merr != nil {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: decode response: %w", merr)
+			return
+		}
+		if len(rest) > 0 {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: decode response: %d trailing bytes", len(rest))
+			return
+		}
+		j, jerr := json.Marshal(msg)
+		if jerr != nil {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: marshal decoded response: %w", jerr)
+			return
+		}
+		if spec2, jwt2, ctype2, ok := reissuedChallenge(j); ok {
+			if ctype2 != "" && ctype2 != "hsw" {
+				at.Err = fmt.Errorf("hcaptcha: getcaptcha: server re-issued %q challenge (not solvable via PoW)", ctype2)
+				return
+			}
+			spec, jwt = spec2, jwt2
+			continue
+		}
+		at.Token = FindP1Token(j)
+		if at.Token == "" {
+			at.Err = fmt.Errorf("hcaptcha: getcaptcha: encrypted response carries no passcode: %s", clipBytes(j))
+		}
 		return
 	}
-	body := msgpackEncodeWire(spec, cipher)
-	status, resp, err := postGetCaptchaOctetFn(ctx, sitekey, body)
-	at.Status, at.Body = status, resp
-	if err != nil {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: %w", err)
-		return
-	}
-	at.Token = FindP1Token(resp)
-	if at.Token != "" || status != http.StatusOK {
-		return
-	}
-	// A 200 answer to an encrypted submission is the wasm-encrypted response;
-	// decrypt (mode 0) and msgpack-decode before scanning for a passcode.
-	dec, derr := solver.Crypto(ctx, 0, resp)
-	if derr != nil {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: decrypt: %w", derr)
-		return
-	}
-	msg, rest, merr := msgpackDecode(dec)
-	if merr != nil {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: decode response: %w", merr)
-		return
-	}
-	if len(rest) > 0 {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: decode response: %d trailing bytes", len(rest))
-		return
-	}
-	j, jerr := json.Marshal(msg)
-	if jerr != nil {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: marshal decoded response: %w", jerr)
-		return
-	}
-	at.Token = FindP1Token(j)
-	if at.Token == "" {
-		at.Err = fmt.Errorf("hcaptcha: getcaptcha: encrypted response carries no passcode: %s", clipBytes(j))
-	}
+	at.Err = fmt.Errorf("hcaptcha: getcaptcha: server re-issued a fresh challenge %d times (proof kept being rejected)", maxEncryptedRounds)
 	return
 }
 
+// maxEncryptedRounds bounds the encrypted solve→submit loop: a submission
+// answered with a fresh challenge is re-solved and resubmitted at most this
+// many times before the attempt fails and the caller's retry ladder takes
+// over.
+const maxEncryptedRounds = 3
+
 // specFromClaim extracts the challenge spec from a getcaptcha (or
 // checksiteconfig) claim response and returns it as the JSON string the
-// submission's c parameter must carry, plus the challenge jwt inside it.
-func specFromClaim(body []byte) (spec, jwt string, err error) {
+// submission's c parameter must carry, plus the challenge jwt inside it and
+// the challenge type ("" when absent), so callers can classify non-PoW
+// challenge kinds.
+func specFromClaim(body []byte) (spec, jwt, ctype string, err error) {
 	var doc struct {
 		C *struct {
 			Type string `json:"type"`
@@ -567,16 +671,38 @@ func specFromClaim(body []byte) (spec, jwt string, err error) {
 		} `json:"c"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return "", "", fmt.Errorf("decode claim: %w", err)
+		return "", "", "", fmt.Errorf("decode claim: %w", err)
 	}
 	if doc.C == nil || doc.C.Req == "" {
-		return "", "", fmt.Errorf("no challenge in claim: %s", clipBytes(body))
+		return "", "", "", fmt.Errorf("no challenge in claim: %s", clipBytes(body))
 	}
 	specRaw, err := json.Marshal(doc.C)
 	if err != nil {
-		return "", "", fmt.Errorf("encode claim spec: %w", err)
+		return "", "", "", fmt.Errorf("encode claim spec: %w", err)
 	}
-	return string(specRaw), doc.C.Req, nil
+	return string(specRaw), doc.C.Req, doc.C.Type, nil
+}
+
+// reissuedChallenge reports whether body carries a fresh challenge instead of
+// a passcode — the server's answer to a rejected proof. It yields the new
+// challenge spec (the JSON the next submission's c parameter carries), the new
+// challenge jwt and its type. ok is false for passcode payloads, encrypted
+// bodies and anything else that is not a {"c":{...,"req":...}} document.
+func reissuedChallenge(body []byte) (spec, jwt, ctype string, ok bool) {
+	var doc struct {
+		C *struct {
+			Type string `json:"type"`
+			Req  string `json:"req"`
+		} `json:"c"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil || doc.C == nil || doc.C.Req == "" {
+		return "", "", "", false
+	}
+	specRaw, err := json.Marshal(doc.C)
+	if err != nil {
+		return "", "", "", false
+	}
+	return string(specRaw), doc.C.Req, doc.C.Type, true
 }
 
 // gcVariant is one getcaptcha parameter variant.
