@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -282,16 +283,92 @@ var reInstantiateBare = regexp.MustCompile(
 // bundles into a synchronous Module + Instance pair wrapped in an already
 // resolved Promise, preserving the {module, instance} shape that the original
 // then-callback receives. Reports whether the rewrite applied.
+//
+// The rewrite also injects a byte-patch pass over the assembled wasm image
+// before instantiation (see wasmTrapPatchJS for what it neutralizes and why).
 func syncWasmInstantiate(src string) (out string, count int) {
 	m := reInstantiateThen.FindStringSubmatch(src)
 	if m == nil {
 		return src, 0
 	}
-	repl := m[1] + `=(function(){var __m=new WebAssembly.Module(` + m[2] +
+	repl := m[1] + `=(function(){` + wasmTrapPatchJS(m[2]) +
+		`var __m=new WebAssembly.Module(` + m[2] +
 		`);var __i=new WebAssembly.Instance(__m,` + m[3] +
 		`);var __r={module:__m,instance:__i};queueMicrotask(function(){` + m[5] +
 		`(__r)});return Promise.resolve(__r)})()`
 	return strings.ReplaceAll(src, m[0], repl), 1
+}
+
+// wasmTrapPatchJS returns JavaScript that scans the assembled v1 wasm image
+// (the Uint8Array named by bytesVar) and neutralizes the environment-check
+// abort sites introduced by the 2026-11 hsw.js release.
+//
+// That release gates the PoW behind a wasm state machine whose branch runs an
+// environment probe; in headless runtimes (v8go, plain Node) the probe takes
+// an "impossible state" branch and the machine traps on an `unreachable`
+// instruction (RuntimeError: unreachable), leaving the solve promise pending
+// forever. In a real browser the probe passes and the machine continues past
+// the same instruction.
+//
+// The abort sites compile to a distinctive 18-byte shape:
+//
+//	41 84 08       i32.const 1028        ; heap-object sentinel compare
+//	4f             i32.ge_u
+//	04 7f          if (result i32)
+//	41 ??          i32.const <state A>
+//	05             else
+//	41 ??          i32.const <state B>
+//	0b             end
+//	21 01          local.set 1           ; next state machine state
+//	0c ??          br <depth>            ; loop back edge
+//	0b             end
+//	00             unreachable           ; <- trap target
+//
+// Each match's trailing `unreachable` (opcode 0x00) is rewritten to `nop`
+// (0x01): the fall-through then re-enters the state machine exactly as it
+// would after the probe passes in a browser. Both are single-byte opcodes, so
+// the image length and every other offset are preserved. The scan is
+// idempotent (patched bytes no longer match) and silently patches zero sites
+// if a future bundle changes the shape, in which case behavior falls back to
+// the pre-patch (broken) solve rather than corrupting anything.
+//
+// Scanning 1MB of Uint8Array in JS costs single-digit milliseconds, well
+// under one solve's PoW time, and runs only inside apM's one-shot
+// (if !ke) init block.
+func wasmTrapPatchJS(bytesVar string) string {
+	// Byte constants kept in decimal to avoid escapes in the embedded JS.
+	const (
+		bI32Const = 65  // 0x41
+		bSentinel = 132 // 0x84 low byte of 1028
+		bSentHi   = 8   // 0x08 high byte of 1028
+		bGeU      = 79  // 0x4f i32.ge_u
+		bIf       = 4   // 0x04
+		bI32Res   = 127 // 0x7f i32
+		bElse     = 5   // 0x05
+		bEnd      = 11  // 0x0b
+		bLocalSet = 33  // 0x21
+		bLocal1   = 1   // local index 1
+		bBr       = 12  // 0x0c
+		bUnreach  = 0   // 0x00
+		bNop      = 1   // 0x01
+	)
+	return `try{for(var __po=0;__po+17<` + bytesVar + `.length;__po++){` +
+		`if(` + bytesVar + `[__po+17]==` + strconv.Itoa(bUnreach) +
+		`&&` + bytesVar + `[__po]==` + strconv.Itoa(bI32Const) +
+		`&&` + bytesVar + `[__po+1]==` + strconv.Itoa(bSentinel) +
+		`&&` + bytesVar + `[__po+2]==` + strconv.Itoa(bSentHi) +
+		`&&` + bytesVar + `[__po+3]==` + strconv.Itoa(bGeU) +
+		`&&` + bytesVar + `[__po+4]==` + strconv.Itoa(bIf) +
+		`&&` + bytesVar + `[__po+5]==` + strconv.Itoa(bI32Res) +
+		`&&` + bytesVar + `[__po+6]==` + strconv.Itoa(bI32Const) +
+		`&&` + bytesVar + `[__po+8]==` + strconv.Itoa(bElse) +
+		`&&` + bytesVar + `[__po+9]==` + strconv.Itoa(bI32Const) +
+		`&&` + bytesVar + `[__po+11]==` + strconv.Itoa(bEnd) +
+		`&&` + bytesVar + `[__po+12]==` + strconv.Itoa(bLocalSet) +
+		`&&` + bytesVar + `[__po+13]==` + strconv.Itoa(bLocal1) +
+		`&&` + bytesVar + `[__po+14]==` + strconv.Itoa(bBr) +
+		`&&` + bytesVar + `[__po+16]==` + strconv.Itoa(bEnd) +
+		`){` + bytesVar + `[__po+17]=` + strconv.Itoa(bNop) + `}}}catch(__pe){}`
 }
 
 // syncWasmInstantiateBare handles the no-then variant.
