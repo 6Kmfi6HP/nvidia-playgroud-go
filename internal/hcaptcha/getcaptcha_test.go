@@ -595,3 +595,57 @@ func TestCaptchaTokenEncryptedReissueNonHsw(t *testing.T) {
 		t.Errorf("octet calls = %d, want 1 (loop must stop at the non-hsw re-issue)", calls)
 	}
 }
+
+// TestCaptchaTokenRotatesConnectionsOnFailure verifies the failure-rotation
+// contract: an extraction that yields no passcode must close the pipeline's
+// idle connections (so the next attempt dials a fresh proxy exit), while a
+// successful extraction must keep them warm.
+func TestCaptchaTokenRotatesConnectionsOnFailure(t *testing.T) {
+	oldReset := resetConns
+	defer func() { resetConns = oldReset }()
+	rotated := 0
+	resetConns = func() { rotated++ }
+
+	// Failure path: no passcode from any variant.
+	_, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
+		return http.StatusBadRequest, []byte(`{"pass":false}`), nil
+	})
+	defer cleanup()
+	_, err := CaptchaToken(context.Background(), "sitekey", "host")
+	if err == nil {
+		t.Fatal("CaptchaToken succeeded, want failure")
+	}
+	if rotated != 1 {
+		t.Errorf("rotations after failure = %d, want 1", rotated)
+	}
+
+	// Success path: connection stays warm.
+	_, _, cleanup2 := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
+		return 200, []byte(`{"pass":true,"generated_pass_UUID":"P1_eyJ3YXJtLmNvbm4ifQ.offline"}`), nil
+	})
+	defer cleanup2()
+	rotated = 0
+	tok, err := CaptchaToken(context.Background(), "sitekey", "host")
+	if err != nil {
+		t.Fatalf("CaptchaToken (success path): %v", err)
+	}
+	if tok == "" {
+		t.Fatal("CaptchaToken returned empty token on success")
+	}
+	if rotated != 0 {
+		t.Errorf("rotations after success = %d, want 0 (a working exit stays warm)", rotated)
+	}
+
+	// A context-canceled failure is the caller unwinding, not a bad exit:
+	// no rotation.
+	rotated = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = CaptchaToken(ctx, "sitekey", "host")
+	if err == nil {
+		t.Fatal("CaptchaToken succeeded on canceled context, want failure")
+	}
+	if rotated != 0 {
+		t.Errorf("rotations after context cancel = %d, want 0", rotated)
+	}
+}

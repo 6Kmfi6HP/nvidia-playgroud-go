@@ -67,6 +67,22 @@ var gcClient = &http.Client{Timeout: 60 * time.Second}
 // proxy. Must be called before solving starts.
 func SetHTTPClient(c *http.Client) { gcClient = c }
 
+// resetConns is the failure-rotation indirection (overridable in tests).
+var resetConns = ResetConnections
+
+// ResetConnections closes every idle captcha-pipeline connection (this
+// package's client plus the hsw downloader's), so the next request dials
+// fresh. Through a rotating proxy pool a fresh connection carries a fresh
+// exit IP: the pool worker's retry ladder calls this after every failed
+// extraction to abandon a risk-flagged or poisoned exit instead of hammering
+// the same one until its 120s idle timeout recycles it. Successful solves
+// keep their connection warm — a working exit is exactly what not to give
+// up. No-op without a proxy (the next dial comes from the same local IP).
+func ResetConnections() {
+	gcClient.CloseIdleConnections()
+	hsw.ResetConnections()
+}
+
 // reP1Token matches an hCaptcha passcode anywhere in raw text. Tokens are
 // long opaque strings starting with "P1_" (base64url payloads with ".").
 var reP1Token = regexp.MustCompile(`P1_[A-Za-z0-9._~-]{20,}`)
@@ -817,12 +833,18 @@ func CaptchaToken(ctx context.Context, sitekey, host string) (string, error) {
 func CaptchaTokenDetail(ctx context.Context, sitekey, host string) (string, SolveInfo, error) {
 	solve, attempts, err := CaptchaAttempts(ctx, sitekey, host)
 	if err != nil {
+		if ctx.Err() == nil {
+			resetConns() // rotate the exit before the caller's retry
+		}
 		return "", solve, err // already prefixed with the failing stage
 	}
 	for _, a := range attempts {
 		if a.Token != "" {
 			return a.Token, solve, nil
 		}
+	}
+	if ctx.Err() == nil {
+		resetConns() // rotate the exit before the caller's retry
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "hcaptcha: getcaptcha: no passcode from %d variants (jwt_len=%d location=%q n_len=%d)",
