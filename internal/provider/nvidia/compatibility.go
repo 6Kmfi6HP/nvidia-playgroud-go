@@ -8,6 +8,13 @@ import (
 )
 
 func translateToChat(source sdktranslator.Format, model string, request []byte, stream bool) ([]byte, error) {
+	switch source {
+	case sdktranslator.FormatClaude:
+		request = DecodeClaudeToolCallIDs(request)
+	case sdktranslator.FormatOpenAI:
+		request = DecodeOpenAIToolCallIDs(request)
+	}
+
 	var sourceBody map[string]json.RawMessage
 	if err := json.Unmarshal(request, &sourceBody); err != nil {
 		return nil, fmt.Errorf("decode source request: %w", err)

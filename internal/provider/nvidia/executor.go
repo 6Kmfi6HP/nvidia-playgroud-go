@@ -137,6 +137,7 @@ func (e *Executor) Execute(ctx context.Context, _ *coreauth.Auth, req clipexec.R
 	if err != nil {
 		return clipexec.Response{}, err
 	}
+	raw = NewToolCallIDRewriter().RewritePayload(raw)
 	from := sdktranslator.FormatOpenAI
 	to := clipexec.ResponseFormatOrSource(opts)
 	out := sdktranslator.TranslateNonStream(ctx, from, to, req.Model, opts.OriginalRequest, body, raw, nil)
@@ -163,8 +164,14 @@ func (e *Executor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, req clip
 		from := sdktranslator.FormatOpenAI
 		to := clipexec.ResponseFormatOrSource(opts)
 		var param any
+		rewriter := NewToolCallIDRewriter()
 
 		emitLine := func(line string) error {
+			if strings.HasPrefix(line, "data: ") && line != "data: [DONE]" {
+				payload := []byte(strings.TrimPrefix(line, "data: "))
+				rewritten := rewriter.RewritePayload(payload)
+				line = "data: " + string(rewritten)
+			}
 			chunks := sdktranslator.TranslateStream(ctx, from, to, req.Model, opts.OriginalRequest, body, []byte(line), &param)
 			for _, chunk := range chunks {
 				select {
