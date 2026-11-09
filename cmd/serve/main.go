@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"nvidia-playgroud-go/internal/captcha"
+	"nvidia-playgroud-go/internal/captchatls"
 	"nvidia-playgroud-go/internal/hcaptcha"
 	"nvidia-playgroud-go/internal/hcaptchapow"
 	"nvidia-playgroud-go/internal/hsw"
@@ -86,12 +87,14 @@ func main() {
 		proxyURL = strings.TrimSpace(os.Getenv("CHROME_PROXY"))
 	}
 	proxyFunc := http.ProxyFromEnvironment
+	var captchaProxy *url.URL
 	if proxyURL != "" {
 		u, err := url.Parse(proxyURL)
 		if err != nil || u.Scheme == "" || u.Host == "" {
 			log.Fatalf("proxy: invalid URL %q", proxyURL)
 		}
 		proxyFunc = http.ProxyURL(u)
+		captchaProxy = u
 		log.Printf("upstream proxy=%s (PoW solver + catalog; predict API direct)", proxyURL)
 	}
 	// Predict requests to the NVIDIA gateway are latency-sensitive and reachable
@@ -123,17 +126,16 @@ func main() {
 	// Rotating-proxy pools assign a fresh exit IP per new TCP connection, so
 	// without the pin a single solve drifts across exits mid-flow and the
 	// server's (IP, sitekey, challenge-chain) risk binding rejects otherwise
-	// valid proofs as foreign submissions. HTTP/2 multiplexes concurrent
-	// requests over the pinned connection; with HTTP/1.1 the speculative claim
-	// queues behind checksiteconfig for a few seconds — acceptable either way.
+	// valid proofs as foreign submissions. uTLS pins ALPN to HTTP/1.1, so a
+	// speculative claim queues behind checksiteconfig; the widget path submits
+	// the checksiteconfig challenge directly and does not depend on it.
 	// The model-catalog scraper keeps the high-concurrency transport above.
-	captchaTransport := &http.Transport{
-		Proxy: proxyFunc,
+	baseCaptchaTransport := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          4,
 		MaxIdleConnsPerHost:   2,
 		MaxConnsPerHost:       1,
@@ -141,6 +143,13 @@ func main() {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second,
+	}
+	// hCaptcha fingerprints the TLS ClientHello; use a Chrome-shaped uTLS
+	// handshake (HTTP/1.1 pinned) so the checksiteconfig/challenge exchange is
+	// served the same flow a browser receives.
+	captchaTransport, err := captchatls.New(baseCaptchaTransport, captchaProxy)
+	if err != nil {
+		log.Fatalf("captcha transport: %v", err)
 	}
 	hcaptcha.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: captchaTransport})
 	hsw.SetHTTPClient(&http.Client{Timeout: 60 * time.Second, Transport: captchaTransport})

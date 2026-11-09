@@ -68,7 +68,7 @@ MODEL_LIVE=1 go test ./internal/models -run TestLiveFetchSmoke -v
 
 ## 验证码
 
-验证码由纯 Go hCaptcha PoW 求解器生成，使用 v8go 运行上游脚本，不需要 Chromium。
+验证码由纯 Go hCaptcha PoW 求解器生成，使用 v8go 运行上游脚本，不需要 Chromium。请求走 Chrome 指纹的 uTLS 传输（ALPN 固定 HTTP/1.1），按浏览器 widget 流程提交 checksiteconfig challenge，并动态读取当前 `api.js` 版本。
 
 - token 单次有效，池中 token 默认 90 秒后丢弃。
 - token 来源优先级：请求头 `nv-captcha-token`、`-captcha` 一次性参数、`-auto` token 池。
@@ -170,6 +170,7 @@ cmd/predict/          单发 predict 请求
 cmd/captchapow/       hCaptcha PoW token 工具
 cmd/streambench/      SSE 和并发测试
 internal/captcha/     token 池
+internal/captchatls/  uTLS Chrome 指纹传输
 internal/hcaptcha/    hCaptcha 请求编排
 internal/hcaptchapow/ PoW 算法
 internal/hsw/         v8go 运行器

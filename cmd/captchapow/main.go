@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	nvidia "nvidia-playgroud-go"
+	"nvidia-playgroud-go/internal/captchatls"
 	"nvidia-playgroud-go/internal/hcaptcha"
 	"nvidia-playgroud-go/internal/hsw"
 )
@@ -59,28 +60,32 @@ func run() error {
 	// MaxConnsPerHost 1 mirrors cmd/serve's sticky captcha transport: rotating
 	// proxy pools give each new TCP connection a fresh exit IP, and a solve
 	// drifting across exits mid-flow is rejected as a foreign submission.
+	// The uTLS transport presents Chrome's ClientHello; hCaptcha's edge
+	// classifies bare Go TLS as a bot before it issues a solvable challenge.
+	var proxyURL *url.URL
 	if *proxy != "" {
 		u, perr := url.Parse(*proxy)
 		if perr != nil {
 			return fmt.Errorf("parse proxy url: %w", perr)
 		}
-		client := &http.Client{
-			Timeout: 60 * time.Second,
-			Transport: &http.Transport{
-				Proxy:                 http.ProxyURL(u),
-				ForceAttemptHTTP2:     true,
-				MaxIdleConns:          4,
-				MaxIdleConnsPerHost:   2,
-				MaxConnsPerHost:       1,
-				IdleConnTimeout:       120 * time.Second,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ExpectContinueTimeout: 1 * time.Second,
-				ResponseHeaderTimeout: 60 * time.Second,
-			},
-		}
-		hcaptcha.SetHTTPClient(client)
-		hsw.SetHTTPClient(client)
+		proxyURL = u
 	}
+	base := &http.Transport{
+		MaxIdleConns:          4,
+		MaxIdleConnsPerHost:   2,
+		MaxConnsPerHost:       1,
+		IdleConnTimeout:       120 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+	}
+	tr, terr := captchatls.New(base, proxyURL)
+	if terr != nil {
+		return fmt.Errorf("captcha transport: %w", terr)
+	}
+	client := &http.Client{Timeout: 60 * time.Second, Transport: tr}
+	hcaptcha.SetHTTPClient(client)
+	hsw.SetHTTPClient(client)
 	if *pinLocation != "" {
 		hcaptcha.SetPinnedBundleLocation(*pinLocation)
 	}

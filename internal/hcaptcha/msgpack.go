@@ -334,3 +334,52 @@ func msgpackLen(b []byte) (n int, rest []byte, err error) {
 	}
 	return 0, nil, fmt.Errorf("msgpack: tag %#x has no length", b[0])
 }
+
+// msgpackEncodeMapAny encodes a map with mixed scalar values. The widget
+// payload carries e:null alongside strings, which the string-only encoder
+// cannot express.
+func msgpackEncodeMapAny(m map[string]any) []byte {
+	body := []byte{}
+	for k, v := range m {
+		body = append(body, msgpackEncodeString(k)...)
+		body = append(body, msgpackEncodeAny(v)...)
+	}
+	head := []byte{}
+	switch {
+	case len(m) < 16:
+		head = append(head, 0x80|byte(len(m)))
+	case len(m) <= 65535:
+		head = append(head, 0xde)
+		head = binary.BigEndian.AppendUint16(head, uint16(len(m)))
+	default:
+		head = append(head, 0xdf)
+		head = binary.BigEndian.AppendUint32(head, uint32(len(m)))
+	}
+	return append(head, body...)
+}
+
+func msgpackEncodeAny(v any) []byte {
+	switch x := v.(type) {
+	case nil:
+		return []byte{0xc0}
+	case string:
+		return msgpackEncodeString(x)
+	case bool:
+		if x {
+			return []byte{0xc3}
+		}
+		return []byte{0xc2}
+	case int:
+		if x >= 0 && x < 128 {
+			return []byte{byte(x)}
+		}
+		return append([]byte{0xd0}, byte(int8(x)))
+	case int64:
+		if x >= 0 && x < 128 {
+			return []byte{byte(x)}
+		}
+		return append([]byte{0xd0}, byte(int8(x)))
+	default:
+		return []byte{0xc0}
+	}
+}

@@ -7,11 +7,13 @@ require (
 	github.com/bogdanfinn/fhttp v0.6.8
 	github.com/bogdanfinn/tls-client v1.15.1
 	github.com/gin-gonic/gin v1.10.1
+	github.com/refraction-networking/utls v1.8.2
 	github.com/router-for-me/CLIProxyAPI/v7 v7.2.97
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/tommie/v8go v0.34.0
 	golang.org/x/crypto v0.57.0
+	golang.org/x/net v0.60.0
 )
 
 require (
@@ -47,7 +49,6 @@ require (
 	github.com/pierrec/xxHash v0.1.5 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/redis/go-redis/v9 v9.19.0 // indirect
-	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
@@ -64,7 +65,6 @@ require (
 	github.com/ugorji/go/codec v1.2.12 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/arch v0.8.0 // indirect
-	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect

@@ -56,6 +56,11 @@ const (
 // getCaptchaUA matches the browser headers hCaptcha's asset frontend sends.
 const getCaptchaUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
+// widgetUA is the user agent the reference minter (nvidia-playground.mjs)
+// uses. The TLS/HTTP fingerprint and this string should describe the same
+// browser.
+const widgetUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+
 // getcaptchaURL is the getcaptcha endpoint; overridable in tests.
 var getcaptchaURL = getcaptchaEndpoint
 
@@ -314,13 +319,17 @@ var fetchChecksite = fetchChecksiteLive
 // "." of a JWT payload). It also reports features.enc_get_req so the caller
 // can route straight to the encrypted submission when the site demands it.
 func fetchChecksiteLive(ctx context.Context, sitekey, host string) (jwt, location, key string, encGetReq bool, err error) {
-	u := fmt.Sprintf("%s?host=%s&sitekey=%s&sc=1&swa=0&spst=0&hl=en",
-		hsw.ChecksiteBase, url.QueryEscape(host), url.QueryEscape(sitekey))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
+	u := fmt.Sprintf("%s?v=%s&host=%s&sitekey=%s&sc=1&swa=1&spst=1&hl=en",
+		hsw.ChecksiteBase, url.QueryEscape(AssetVersion(ctx)), url.QueryEscape(host), url.QueryEscape(sitekey))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, http.NoBody)
 	if err != nil {
 		return "", "", "", false, fmt.Errorf("checksiteconfig: %w", err)
 	}
-	req.Header.Set("User-Agent", getCaptchaUA)
+	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://newassets.hcaptcha.com")
+	req.Header.Set("Referer", "https://newassets.hcaptcha.com/")
+	req.Header.Set("User-Agent", widgetUA)
 	resp, err := gcClient.Do(req)
 	if err != nil {
 		return "", "", "", false, fmt.Errorf("checksiteconfig: %w", err)
@@ -408,9 +417,27 @@ func CaptchaAttempts(ctx context.Context, sitekey, host string) (solve SolveInfo
 	}
 
 	if encGetReq {
-		// Encrypted-only fast path: adopt the speculative claim (or claim
-		// fresh if it failed) and skip the plaintext variants.
 		claim := <-claimCh
+		// Preferred: the reference minter flow, submitting the checksiteconfig
+		// challenge directly with the widget's encrypted payload. This is the
+		// shape the live frontend accepts.
+		if jwt != "" {
+			at, info := runWidgetAttempt(ctx, sitekey, host, jwt, location)
+			info.Elapsed = time.Since(start)
+			if at.Err == nil {
+				return info, []CaptchaAttempt{at}, nil
+			}
+			// Fall back to the older claim-based encrypted flow.
+			var pclaim *claimResult
+			if claim.err == nil {
+				pclaim = &claim
+			}
+			at2, info2 := runEncryptedAttempt(ctx, sitekey, host, pclaim)
+			info2.Elapsed = time.Since(start)
+			return info2, []CaptchaAttempt{at, at2}, nil
+		}
+		// Encrypted-only fast path with no checksiteconfig challenge (tests or
+		// a degraded upstream): adopt the speculative claim.
 		var pclaim *claimResult
 		if claim.err == nil {
 			pclaim = &claim
