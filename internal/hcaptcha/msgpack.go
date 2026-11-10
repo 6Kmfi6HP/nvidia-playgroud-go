@@ -358,6 +358,33 @@ func msgpackEncodeMapAny(m map[string]any) []byte {
 	return append(head, body...)
 }
 
+// msgpackEncodeOrdered encodes pairs in the given order. The reference minter
+// inserts v, sitekey, host, hl, motionData, n, e and msgpack-lite keeps that
+// order; a Go map would not.
+func msgpackEncodeOrdered(keys []string, vals []any) []byte {
+	body := []byte{}
+	n := len(keys)
+	if len(vals) < n {
+		n = len(vals)
+	}
+	for i := range n {
+		body = append(body, msgpackEncodeString(keys[i])...)
+		body = append(body, msgpackEncodeAny(vals[i])...)
+	}
+	head := []byte{}
+	switch {
+	case n < 16:
+		head = append(head, 0x80|byte(n))
+	case n <= 65535:
+		head = append(head, 0xde)
+		head = binary.BigEndian.AppendUint16(head, uint16(n))
+	default:
+		head = append(head, 0xdf)
+		head = binary.BigEndian.AppendUint32(head, uint32(n))
+	}
+	return append(head, body...)
+}
+
 func msgpackEncodeAny(v any) []byte {
 	switch x := v.(type) {
 	case nil:

@@ -15,6 +15,7 @@ package hsw
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -265,6 +266,93 @@ func (s *Solver) SolveN(ctx context.Context, jwt, fpB64 string) (string, error) 
 	}
 
 	// Rejected: surface the JS error's message if available.
+	msg := resultVal.String()
+	if resultVal.IsObject() {
+		if m, e := resultVal.Object().Get("message"); e == nil && !m.IsUndefined() {
+			msg = m.String()
+			m.Release()
+		}
+	}
+	return "", fmt.Errorf("hsw: solve rejected: %s", msg)
+}
+
+// SolveRequest runs module.exports(jwt, {href, ardata:null}). That is the call
+// nvidia-playground.mjs makes: hsw collects the fingerprint from the VM.
+// vm_data and uj_data are left undefined, matching the minter.
+func (s *Solver) SolveRequest(ctx context.Context, jwt, href string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.bundle == nil || s.bundle.Source == "" {
+		return "", fmt.Errorf("hsw: empty bundle")
+	}
+	if s.vctx == nil || s.fnSolve == nil {
+		if err := s.init(); err != nil {
+			return "", err
+		}
+	}
+
+	deadline, cancel := context.WithTimeout(ctx, DefaultSolveTimeout)
+	defer cancel()
+
+	jwtVal, err := v8.NewValue(s.iso, jwt)
+	if err != nil {
+		return "", fmt.Errorf("hsw: jwt arg: %w", err)
+	}
+	defer jwtVal.Release()
+	hrefJSON, err := json.Marshal(href)
+	if err != nil {
+		return "", fmt.Errorf("hsw: href: %w", err)
+	}
+	opts, err := s.vctx.RunScript(fmt.Sprintf("({href:%s,ardata:null})", hrefJSON), "hsw-request-opts.js")
+	if err != nil {
+		return "", fmt.Errorf("hsw: request opts: %w", jsErr(err))
+	}
+	defer opts.Release()
+
+	res, err := s.fnSolve.Call(s.global, jwtVal, opts)
+	if err != nil {
+		return "", fmt.Errorf("hsw: call module.exports: %w", jsErr(err))
+	}
+	defer res.Release()
+
+	if !res.IsPromise() {
+		return res.String(), nil
+	}
+	p, err := res.AsPromise()
+	if err != nil {
+		return "", fmt.Errorf("hsw: result is not a promise: %w", err)
+	}
+	if p.State() == v8.Pending {
+		s.vctx.PerformMicrotaskCheckpoint()
+	}
+	if p.State() == v8.Pending {
+		timer := time.NewTimer(spinInterval)
+		defer timer.Stop()
+		wait := spinInterval
+		for p.State() == v8.Pending {
+			if deadline.Err() != nil {
+				return "", fmt.Errorf("%w: solve timed out after %s", ErrBundleBroken, DefaultSolveTimeout)
+			}
+			s.vctx.PerformMicrotaskCheckpoint()
+			if p.State() == v8.Pending {
+				select {
+				case <-deadline.Done():
+				case <-timer.C:
+					wait *= backoffFactor
+					if wait > poolInterval {
+						wait = poolInterval
+					}
+					timer.Reset(wait)
+				}
+			}
+		}
+	}
+	resultVal := p.Result()
+	defer resultVal.Release()
+	if p.State() == v8.Fulfilled {
+		return resultVal.String(), nil
+	}
 	msg := resultVal.String()
 	if resultVal.IsObject() {
 		if m, e := resultVal.Object().Get("message"); e == nil && !m.IsUndefined() {

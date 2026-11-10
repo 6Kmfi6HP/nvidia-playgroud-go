@@ -109,10 +109,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("stage: checksiteconfig=%dms jwt_len=%d location=%q key=%q\n",
-		solve.Elapsed.Milliseconds(), len(solve.JWT), solve.Location, solve.Key)
-	fmt.Printf("stage: fingerprint_len=%d n_len=%d n_prefix=%q\n",
-		len(solve.Fingerprint), len(solve.N), clip(solve.N, 40))
+	fmt.Printf("stage: checksiteconfig=%dms jwt_len=%d location=%q\n",
+		solve.Elapsed.Milliseconds(), len(solve.JWT), solve.Location)
+	fmt.Printf("stage: n_len=%d n_prefix=%q\n",
+		len(solve.N), clip(solve.N, 40))
 
 	token := ""
 	for _, a := range attempts {
@@ -140,7 +140,7 @@ func run() error {
 	}
 
 	if token == "" {
-		return fmt.Errorf("no P1_ passcode in any getcaptcha variant; see per-variant status/body above")
+		return fmt.Errorf("no generated_pass_UUID from getcaptcha; see status/body above")
 	}
 	fmt.Println(token)
 	if *verify {

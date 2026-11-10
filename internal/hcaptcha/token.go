@@ -131,6 +131,7 @@ func CloseSolvers() {
 		v.(*hsw.Solver).Close()
 		return true
 	})
+	closeMintSolvers()
 	brokenBundlesMu.Lock()
 	brokenBundles = map[string]time.Time{}
 	brokenBundlesMu.Unlock()

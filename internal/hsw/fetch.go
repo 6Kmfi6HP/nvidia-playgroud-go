@@ -16,11 +16,13 @@ package hsw
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -41,16 +43,86 @@ const (
 
 var hswClient = &http.Client{Timeout: httpTimeout}
 
+func init() {
+	if jar, err := cookiejar.New(nil); err == nil {
+		hswClient.Jar = jar
+	}
+}
+
 // SetHTTPClient replaces the client used for hsw.js downloads and
-// checksiteconfig fetches. cmd/serve uses it to route pure-Go PoW solving
-// through the upstream proxy. Must be called before solving starts.
-func SetHTTPClient(c *http.Client) { hswClient = c }
+// checksiteconfig fetches. cmd/serve uses it to route solving through the
+// upstream proxy. A nil jar is installed so Set-Cookie from the asset host
+// is replayed, matching the reference minter's per-host cookie jar.
+func SetHTTPClient(c *http.Client) {
+	if c != nil && c.Jar == nil {
+		if jar, err := cookiejar.New(nil); err == nil {
+			c.Jar = jar
+		}
+	}
+	hswClient = c
+}
 
 // ResetConnections closes every idle upstream connection, so the next
 // request dials fresh. Through a rotating proxy pool each new connection
 // carries a new exit IP; callers use this to abandon a risk-flagged exit
 // after a failed solve. No-op when no idle connections are held.
 func ResetConnections() { hswClient.CloseIdleConnections() }
+
+// FetchAsset downloads an hsw bundle the way nvidia-playground.mjs does.
+// The first GET sends referer. A completed non-200 fetches that referer once
+// (the widget HTML) and retries the asset. A non-empty sri must equal
+// "sha256-" plus the standard-base64 SHA-256 of the body. A transport error
+// does not trigger the warmup.
+func FetchAsset(ctx context.Context, assetURL, referer, sri, userAgent string) ([]byte, error) {
+	body, status, err := fetchAssetOnce(ctx, assetURL, referer, userAgent)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK && referer != "" {
+		if _, _, werr := fetchAssetOnce(ctx, referer, "", userAgent); werr != nil {
+			return nil, fmt.Errorf("hsw warmup %s: %w", referer, werr)
+		}
+		body, status, err = fetchAssetOnce(ctx, assetURL, referer, userAgent)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("hsw download %s: HTTP %d", assetURL, status)
+	}
+	if sri != "" {
+		sum := sha256.Sum256(body)
+		got := "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
+		if got != sri {
+			return nil, fmt.Errorf("hsw asset SRI mismatch: got %s want %s", got, sri)
+		}
+	}
+	return body, nil
+}
+
+func fetchAssetOnce(ctx context.Context, assetURL, referer, userAgent string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, http.NoBody)
+	if err != nil {
+		return nil, 0, fmt.Errorf("hsw download %s: %w", assetURL, err)
+	}
+	if userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
+	}
+	req.Header.Set("Accept", "*/*")
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+	resp, err := hswClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("hsw download %s: %w", assetURL, err)
+	}
+	defer CloseBody(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBundleSize))
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("hsw download %s: %w", assetURL, err)
+	}
+	return body, resp.StatusCode, nil
+}
 
 var (
 	// reWindowHSW matches the v1 bundle tail: window.hsw = function(...)...

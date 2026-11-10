@@ -68,7 +68,9 @@ MODEL_LIVE=1 go test ./internal/models -run TestLiveFetchSmoke -v
 
 ## 验证码
 
-验证码由纯 Go hCaptcha PoW 求解器生成，使用 v8go 运行上游脚本，不需要 Chromium。请求走 Chrome 指纹的 uTLS 传输（ALPN 固定 HTTP/1.1），按浏览器 widget 流程提交 checksiteconfig challenge，并动态读取当前 `api.js` 版本。
+验证码求解与 `nvidia-playground.mjs` 的 minter 同一条路径：刮 `api.js` 拿版本，`POST checksiteconfig`（不带 `hl`），在 v8go 里调用 `hsw(jwt, {href, ardata:null})`，由 hsw 自己采集指纹并算出 `n`。提交体是 msgpack `{v, sitekey, host, hl, motionData:"{}", n, e:null}`，经 `hsw(1)` 加密后以 `msgpack([JSON.stringify(c), ext18(密文)])` 发到 `getcaptcha`。只接受 `octet-stream` 答案，解密后只读 `generated_pass_UUID`。不预造指纹，也不走明文参数变体或二次 claim。
+
+hCaptcha 的 HTTP 仍走 Chrome 指纹的 uTLS（ALPN 固定 HTTP/1.1）。下载 `hsw.js` 时带 widget HTML referer，失败会先拉 HTML 再试，并校验 JWT 里的 SRI。
 
 - token 单次有效，池中 token 默认 90 秒后丢弃。
 - token 来源优先级：请求头 `nv-captcha-token`、`-captcha` 一次性参数、`-auto` token 池。

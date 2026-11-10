@@ -215,59 +215,6 @@ const fakeV1Body = `window.hsw = function(vv, aSj) {
   return Promise.resolve("n:" + String(vv).length + ":" + String(aSj).length);
 };`
 
-// TestSolverCacheReusesSolver runs the full offline solve pipeline through
-// the production CaptchaToken path and verifies the solver cache: two solves
-// for the same bundle location reuse the cached solver (loader called once).
-func TestSolverCacheReusesSolver(t *testing.T) {
-	oldFetch, oldLoad, oldPost, oldOctet := fetchChecksite, loadSolver, postGetCaptcha, postGetCaptchaOctetFn
-	defer func() {
-		fetchChecksite, loadSolver, postGetCaptcha, postGetCaptchaOctetFn = oldFetch, oldLoad, oldPost, oldOctet
-		CloseSolvers()
-	}()
-
-	const loc = "/c/282d0ff"
-	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, bool, error) {
-		return fakeJWT(t, loc), loc, "key", false, nil
-	}
-	loads := 0
-	loadSolver = func(ctx context.Context, location string) (*hsw.Solver, error) {
-		loads++
-		b, err := hsw.Prepare([]byte(fakeV1Body))
-		if err != nil {
-			return nil, err
-		}
-		return hsw.New(b)
-	}
-	const tok = "P1_offline.cache-test"
-	postGetCaptcha = func(ctx context.Context, params map[string]string) (int, []byte, error) {
-		return 200, []byte(`{"generated_pass_UUID":"` + tok + `"}`), nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	got1, err := CaptchaToken(ctx, "sitekey", "host")
-	if err != nil {
-		t.Fatalf("CaptchaToken #1: %v", err)
-	}
-	if got1 != tok {
-		t.Fatalf("CaptchaToken #1 = %q, want %q", got1, tok)
-	}
-	if loads != 1 {
-		t.Fatalf("solver loads after #1 = %d, want 1", loads)
-	}
-
-	got2, err := CaptchaToken(ctx, "sitekey", "host")
-	if err != nil {
-		t.Fatalf("CaptchaToken #2: %v", err)
-	}
-	if got2 != tok {
-		t.Errorf("CaptchaToken #2 = %q, want %q", got2, tok)
-	}
-	if loads != 1 {
-		t.Errorf("solver loads after #2 = %d, want 1 (cache miss)", loads)
-	}
-}
 
 // TestLiveCaptchaToken runs the real production path against hCaptcha for
 // build.nvidia.com through CaptchaTokenDetail. Disabled by default; enable

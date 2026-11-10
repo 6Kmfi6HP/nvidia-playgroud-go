@@ -3,649 +3,285 @@ package hcaptcha
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
-	"sync"
 	"testing"
+	"time"
 
 	"nvidia-playgroud-go/internal/hsw"
 )
 
-func TestFindP1Token(t *testing.T) {
-	const tok = "P1_eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig"
-	cases := []struct {
-		name string
-		body string
-		want string
-	}{
-		{"generated_pass_UUID", `{"pass":true,"generated_pass_UUID":"` + tok + `"}`, tok},
-		{"captcha_token", `{"captcha_token":"` + tok + `"}`, tok},
-		{"nested data", `{"data":{"token":"` + tok + `"}}`, tok},
-		{"raw text body", tok, tok},
-		{"no token", `{"pass":false,"error":"invalid or missing n"}`, ""},
-		{"short P1 junk", `{"error":"bad P1_abc"}`, ""},
-		{"empty", "", ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := FindP1Token([]byte(c.body)); got != c.want {
-				t.Errorf("FindP1Token(%q) = %q, want %q", c.body, got, c.want)
-			}
-		})
-	}
-}
-
-// TestPostGetCaptcha drives PostGetCaptcha against a local server: browser
-// headers must be present, the JSON attempt must come first and, when the
-// endpoint rejects it with a non-2xx status, the request must be retried with
-// x-www-form-urlencoded.
-func TestPostGetCaptcha(t *testing.T) {
-	old := getcaptchaURL
-	defer func() { getcaptchaURL = old }()
-
-	var (
-		mu      sync.Mutex
-		gotReq  []string // "content-type|origin|referer|ua|path" per request
-		gotBody []string
-	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read request body: %v", err)
-		}
-		mu.Lock()
-		gotReq = append(gotReq, r.Header.Get("Content-Type")+"|"+r.Header.Get("Origin")+"|"+r.Header.Get("Referer")+"|"+r.Header.Get("User-Agent")+"|"+r.URL.Path)
-		gotBody = append(gotBody, string(body))
-		mu.Unlock()
-		if r.Header.Get("Content-Type") == "application/json" {
-			w.WriteHeader(http.StatusBadRequest)
-			writeTestBody(t, w, []byte(`{"success":false,"error":"json not supported"}`))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		writeTestBody(t, w, []byte(`{"pass":false,"error":"no passcode yet"}`))
-	}))
-	defer srv.Close()
-	getcaptchaURL = srv.URL
-
-	status, body, err := PostGetCaptcha(t.Context(), map[string]string{
-		"sitekey": "sk", "host": "build.nvidia.com", "n": "solved-n",
-	})
-	if err != nil {
-		t.Fatalf("PostGetCaptcha: %v", err)
-	}
-	if status != http.StatusOK {
-		t.Errorf("status = %d, want 200 (form fallback should win)", status)
-	}
-	if !strings.Contains(string(body), "no passcode yet") {
-		t.Errorf("body = %q, want the form attempt's response", body)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(gotReq) != 2 {
-		t.Fatalf("server saw %d requests, want 2 (json then form)", len(gotReq))
-	}
-	if !strings.HasPrefix(gotReq[0], "application/json|") {
-		t.Errorf("request 1 content-type = %q, want application/json first", gotReq[0])
-	}
-	parts := strings.SplitN(gotReq[0], "|", 5)
-	if len(parts) != 5 || parts[1] != "https://newassets.hcaptcha.com" || parts[2] != "https://newassets.hcaptcha.com/" {
-		t.Errorf("request 1 headers = %q, want Origin/Referer pinned to newassets", gotReq[0])
-	}
-	// The endpoint is versioned by sitekey path: /getcaptcha/<sitekey>.
-	for i, req := range gotReq {
-		reqParts := strings.Split(req, "|")
-		if got := reqParts[4]; got != "/sk" {
-			t.Errorf("request %d path = %q, want /sk (sitekey path segment)", i+1, got)
-		}
-	}
-	if !strings.HasPrefix(gotReq[1], "application/x-www-form-urlencoded|") {
-		t.Errorf("request 2 content-type = %q, want form fallback", gotReq[1])
-	}
-	// JSON body must round-trip the params; form body must too.
-	var gotJSON map[string]string
-	if err := json.Unmarshal([]byte(gotBody[0]), &gotJSON); err != nil {
-		t.Fatalf("json body %q: %v", gotBody[0], err)
-	}
-	if len(gotJSON) != 3 || gotJSON["sitekey"] != "sk" || gotJSON["n"] != "solved-n" {
-		t.Errorf("json params = %v, want the posted map", gotJSON)
-	}
-	formVals, err := url.ParseQuery(gotBody[1])
-	if err != nil {
-		t.Fatalf("form body %q: %v", gotBody[1], err)
-	}
-	if formVals.Get("sitekey") != "sk" || formVals.Get("n") != "solved-n" {
-		t.Errorf("form params = %v, want the posted map", formVals)
-	}
-}
-
-// offlineCaptchaEnv installs the offline overrides the getcaptcha tests use:
-// a fake checksiteconfig (jwt + location + key), a fake solver and a fake
-// postGetCaptcha. It returns the jwt/key plus a cleanup function the test
-// must call to restore the package overrides and drop cached solvers.
-func offlineCaptchaEnv(t *testing.T, post func(ctx context.Context, params map[string]string) (int, []byte, error)) (jwt, key string, cleanup func()) {
+func pinVersion(t *testing.T, v string) {
 	t.Helper()
-	oldFetch, oldLoad, oldPost, oldOctet := fetchChecksite, loadSolver, postGetCaptcha, postGetCaptchaOctetFn
+	oldV, oldT := versionValue, versionFetched
+	versionValue, versionFetched = v, time.Now()
+	t.Cleanup(func() { versionValue, versionFetched = oldV, oldT })
+}
+
+// mintEnv stubs the minter seams: one challenge, a fake hsw, and a getcaptcha
+// POST the test supplies. n from the fake solver ends in ":15" when the
+// second argument is an object ("[object Object]"), which is how the test
+// tells the options-object call from a prebuilt fingerprint string.
+func mintEnv(t *testing.T, spec string, post func(ctx context.Context, sitekey string, body []byte) (mintPost, error)) (jwt string, cleanup func()) {
+	t.Helper()
+	pinVersion(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	oldFetch, oldLoad, oldPost := fetchMintChallenge, loadMintBundle, postMint
 	cleanup = func() {
-		fetchChecksite, loadSolver, postGetCaptcha, postGetCaptchaOctetFn = oldFetch, oldLoad, oldPost, oldOctet
+		fetchMintChallenge, loadMintBundle, postMint = oldFetch, oldLoad, oldPost
 		CloseSolvers()
 	}
-
-	const location = "/c/getcaptcha-test-loc"
-	jwt = fakeJWT(t, location)
-	key = "c0ffee-0000-4000-8000-000000000000"
-	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, bool, error) {
-		return jwt, location, key, false, nil
+	jwt = fakeJWT(t, "/c/mint-test-loc")
+	if spec == "" {
+		spec = `{"type":"hsw","req":"` + jwt + `","extra":1}`
 	}
-	loadSolver = func(ctx context.Context, l string) (*hsw.Solver, error) {
+	fetchMintChallenge = func(ctx context.Context, sitekey, host string) (mintChallenge, error) {
+		if err := ctx.Err(); err != nil {
+			return mintChallenge{}, err
+		}
+		return mintChallenge{
+			SpecJSON: spec,
+			JWT:      jwt,
+			Location: "/c/mint-test-loc",
+			Name:     "hsw",
+		}, nil
+	}
+	loadMintBundle = func(ctx context.Context, assetURL, referer, sri string) (*hsw.Solver, error) {
 		b, err := hsw.Prepare([]byte(fakeV1Body))
 		if err != nil {
 			return nil, err
 		}
 		return hsw.New(b)
 	}
-	postGetCaptcha = post
-	return jwt, key, cleanup
+	postMint = post
+	return jwt, cleanup
 }
 
-// TestCaptchaTokenVariantLoop verifies the full offline getcaptcha flow:
-// checksiteconfig -> fingerprint -> solve -> ordered parameter variants,
-// stopping at the first P1_ passcode. The c=jwt variants fail (no passcode),
-// the c=key variant succeeds.
-func TestCaptchaTokenVariantLoop(t *testing.T) {
-	const tok = "P1_eyJjaGFsbGVuZ2UudG9rZW4ifQ.offline"
-	var key string // referenced by the POST fake below; declared before it
-	jwt, key, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
-		if params["c"] == key {
-			return 200, []byte(`{"pass":true,"generated_pass_UUID":"` + tok + `"}`), nil
+func passBody(tok string) []byte {
+	return msgpackEncodeMapString(map[string]string{"generated_pass_UUID": tok})
+}
+
+func TestMintSubmitsRawSpecAndObjectSolve(t *testing.T) {
+	const tok = "P1_eyJtaW50ZXIifQ.offline"
+	var specGot string
+	var payload map[string]any
+	jwt, cleanup := mintEnv(t, "", func(ctx context.Context, sitekey string, body []byte) (mintPost, error) {
+		v, rest, err := msgpackDecode(body)
+		if err != nil || len(rest) != 0 {
+			t.Fatalf("wire decode: %v rest=%d", err, len(rest))
 		}
-		return 200, []byte(`{"pass":false,"error":"invalid challenge c"}`), nil
+		arr, ok := v.([]any)
+		if !ok || len(arr) != 2 {
+			t.Fatalf("wire = %T %v, want [spec, cipher]", v, v)
+		}
+		specGot, _ = arr[0].(string)
+		cipher, ok := arr[1].([]byte)
+		if !ok {
+			t.Fatalf("cipher = %T", arr[1])
+		}
+		solver, err := openSolver(ctx, "/c/mint-test-loc", "", "", "")
+		if err != nil {
+			t.Fatalf("solver: %v", err)
+		}
+		plain, err := solver.Crypto(ctx, 0, cipher)
+		if err != nil {
+			t.Fatalf("decrypt payload: %v", err)
+		}
+		m, rest, err := msgpackDecode(plain)
+		if err != nil || len(rest) != 0 {
+			t.Fatalf("payload decode: %v rest=%d", err, len(rest))
+		}
+		payload, _ = m.(map[string]any)
+		return mintPost{Status: 200, CType: "application/octet-stream", Body: passBody(tok)}, nil
 	})
 	defer cleanup()
 
-	solve, attempts, err := CaptchaAttempts(context.Background(), "sitekey", "host")
+	solve, attempts, err := CaptchaAttempts(context.Background(), "sitekey", "build.nvidia.com")
 	if err != nil {
 		t.Fatalf("CaptchaAttempts: %v", err)
 	}
-	if solve.JWT != jwt || solve.Key != key || solve.N == "" {
-		t.Errorf("solve info jwt=%q key=%q n_len=%d", solve.JWT, solve.Key, len(solve.N))
+	if len(attempts) != 1 || attempts[0].Token != tok {
+		t.Fatalf("attempts = %+v, want one token %s", attempts, tok)
 	}
-	// Six base variants (phase-A bare, c=jwt, c=spec, legacy v, motion,
-	// location-v) then the c=key one; the loop must stop at the first P1.
-	if len(attempts) != 7 {
-		t.Fatalf("attempts = %d, want 7 (loop must stop at first P1)", len(attempts))
+	wantSpec := `{"type":"hsw","req":"` + jwt + `","extra":1}`
+	if specGot != wantSpec {
+		t.Fatalf("wire spec = %s, want raw c %s", specGot, wantSpec)
 	}
-	last := attempts[len(attempts)-1]
-	if last.Token != tok {
-		t.Errorf("last attempt token = %q, want %q", last.Token, tok)
+	if solve.N == "" || !strings.HasSuffix(solve.N, ":15") {
+		t.Fatalf("n = %q, want object-call suffix :15", solve.N)
 	}
-	if last.Params["c"] != key {
-		t.Errorf("last attempt c = %q, want key %q", last.Params["c"], key)
-	}
-	for i, a := range attempts {
-		if a.Params["sitekey"] != "sitekey" || a.Params["host"] != "host" {
-			t.Errorf("attempt %d sitekey/host = %q/%q", i, a.Params["sitekey"], a.Params["host"])
-		}
-		if i == 0 {
-			// phaseA-bare claims a challenge: no n, no c yet.
-			if a.Params["n"] != "" || a.Params["c"] != "" {
-				t.Errorf("attempt 0 (phaseA-bare) n/c = %q/%q, want empty", a.Params["n"], a.Params["c"])
-			}
-			continue
-		}
-		if a.Params["n"] != solve.N {
-			t.Errorf("attempt %d n param = %q, want the solved n", i, a.Params["n"])
+	for k, w := range map[string]string{
+		"v": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sitekey": "sitekey",
+		"host": "build.nvidia.com", "hl": "en", "motionData": "{}", "n": solve.N,
+	} {
+		if got, _ := payload[k].(string); got != w {
+			t.Errorf("payload %s = %q, want %q", k, got, w)
 		}
 	}
-
-	token, err := CaptchaToken(context.Background(), "sitekey", "host")
-	if err != nil {
-		t.Fatalf("CaptchaToken: %v", err)
-	}
-	if token != tok {
-		t.Errorf("CaptchaToken = %q, want %q", token, tok)
+	if got, ok := payload["e"]; !ok || got != nil {
+		t.Errorf("payload e = %#v present=%v, want null", got, ok)
 	}
 }
 
-// TestCaptchaTokenErrorAggregation verifies the no-passcode error path: the
-// error is prefixed by stage, carries every variant's status and clips the raw
-// response bodies at 800 characters.
-func TestCaptchaTokenErrorAggregation(t *testing.T) {
-	longBody := strings.Repeat("x", 2000)
-	_, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
-		return http.StatusBadRequest, []byte(longBody), nil
+func TestMintRejectsNonOctetEvenWithPasscode(t *testing.T) {
+	_, cleanup := mintEnv(t, "", func(ctx context.Context, sitekey string, body []byte) (mintPost, error) {
+		return mintPost{
+			Status: 400,
+			CType:  "application/json",
+			Body:   []byte(`{"generated_pass_UUID":"P1_eyJub3Rhd2lyZSJ9.offline"}`),
+		}, nil
 	})
 	defer cleanup()
-
-	token, err := CaptchaToken(context.Background(), "sitekey", "host")
-	if err == nil {
-		t.Fatalf("CaptchaToken = %q, want error", token)
+	tok, err := CaptchaToken(context.Background(), "sitekey", "host")
+	if err == nil || tok != "" {
+		t.Fatalf("CaptchaToken = %q err=%v, want rejection", tok, err)
 	}
-	msg := err.Error()
-	if !strings.HasPrefix(msg, "hcaptcha: getcaptcha:") {
-		t.Errorf("error prefix = %q, want stage prefix", msg[:min(len(msg), 40)])
-	}
-	if !strings.Contains(msg, "status=400") {
-		t.Error("error does not mention variant statuses")
-	}
-	if !strings.Contains(msg, "(+1200 bytes)") {
-		t.Errorf("error body not clipped at 800 bytes: %.120s", msg)
+	if !strings.Contains(err.Error(), "getcaptcha rejected") {
+		t.Fatalf("err = %v, want content-type rejection", err)
 	}
 }
 
-// TestCaptchaTokenEncrypted covers the wasm-encrypted submission path: no
-// plaintext variant yields a passcode, the octet-stream POST receives the
-// msgpack [spec, ext18] wire, and the (echo) decrypted response carries the
-// P1_ token.
-func TestCaptchaTokenEncrypted(t *testing.T) {
-	const tok = "P1_eyJlbmNyeXB0ZWQudG9rZW4ifQ.offline"
-	// Precompute the claim JWT outside the fake: the speculative claim may
-	// fire from a goroutine where t.Fatal is unsafe.
-	claimJWT := fakeJWT(t, "/c/getcaptcha-test-loc")
-	_, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
-		// The encrypted flow claims via getcaptcha: first call (no n) must
-		// return a challenge spec; later plaintext variants fail.
-		if params["n"] == "" && params["c"] == "" {
-			return 200, []byte(`{"c":{"type":"hsw","req":"` + claimJWT + `"}}`), nil
-		}
-		return 200, []byte(`{"pass":false,"error-codes":["invalid-data"]}`), nil
-	})
-	defer cleanup()
-	oldOctet := postGetCaptchaOctetFn
-	defer func() { postGetCaptchaOctetFn = oldOctet }()
-
-	// Fake octet POST: parse the [spec, ext18(cipher)] wire and answer with a
-	// msgpack-encoded passcode payload.
-	postGetCaptchaOctetFn = func(ctx context.Context, sitekey string, body []byte) (int, []byte, error) {
-		v, rest, err := msgpackDecode(body)
-		if err != nil {
-			return 0, nil, err
-		}
-		arr, ok := v.([]any)
-		if !ok || len(arr) != 2 || len(rest) != 0 {
-			return 0, nil, errors.New("wire is not [spec, cipher]")
-		}
-		cSpec, ok := arr[0].(string)
-		if !ok || !strings.Contains(cSpec, `"type":"hsw"`) {
-			return 0, nil, errors.New("wire spec is not the hsw challenge spec")
-		}
-		cipher, ok := arr[1].([]byte)
-		if !ok || len(cipher) == 0 {
-			return 0, nil, errors.New("wire cipher missing")
-		}
-		resp := msgpackEncodeMapString(map[string]string{"pass": "true"})
-		// append the token as a sibling key via a tiny hand-built map is
-		// overkill; instead encode a fresh map with both entries:
-		return 200, appendMsgpackKV(resp, "generated_pass_UUID", tok), nil
-	}
-
-	token, err := CaptchaToken(context.Background(), "sitekey", "host")
-	if err != nil {
-		t.Fatalf("CaptchaToken (encrypted): %v", err)
-	}
-	if token != tok {
-		t.Errorf("CaptchaToken = %q, want %q", token, tok)
-	}
-}
-
-// appendMsgpackKV appends map16-style key/value entries to a fixmap of n<=3
-// keys by re-encoding; small helper for the encrypted-response fake.
-func appendMsgpackKV(orig []byte, key, val string) []byte {
-	m := map[string]string{}
-	if v, _, err := msgpackDecode(orig); err == nil {
-		if mm, ok := v.(map[string]any); ok {
-			for k, vv := range mm {
-				if s, ok := vv.(string); ok {
-					m[k] = s
-				}
-			}
-		}
-	}
-	m[key] = val
-	return msgpackEncodeMapString(m)
-}
-
-// TestCaptchaAttemptsStageErrors checks the layered error prefixes: a solver
-// failure must surface as "solve" and stop before any getcaptcha round trip.
-func TestCaptchaAttemptsStageErrors(t *testing.T) {
-	oldFetch, oldLoad, oldPost := fetchChecksite, loadSolver, postGetCaptcha
-	defer func() { fetchChecksite, loadSolver, postGetCaptcha = oldFetch, oldLoad, oldPost }()
-	defer CloseSolvers()
-
-	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, bool, error) {
-		return "", "", "", false, errors.New("offline checksite")
-	}
-	loadSolver = func(ctx context.Context, l string) (*hsw.Solver, error) { return nil, errors.New("unused") }
-	// The speculative claim fires at t=0 and reaches this fake; its failure is
-	// discarded when checksite errors out, so no variant/encrypted call may
-	// follow.
-	postGetCaptcha = func(ctx context.Context, params map[string]string) (int, []byte, error) {
-		return 0, nil, errors.New("speculative claim only")
-	}
-
-	_, _, err := CaptchaAttempts(context.Background(), "sitekey", "host")
-	if err == nil || !strings.Contains(err.Error(), "fetch challenge") {
-		t.Fatalf("err = %v, want stage prefix \"fetch challenge\"", err)
-	}
-}
-
-// TestLocationVersion covers version derivation from hsw bundle locations.
-func TestLocationVersion(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"/c/8af55315015e17fa8c964be34ae93d53b7f9c36e", "8af5531"},
-		{"/c/8af5531", "8af5531"},
-		{"8af55315015e17fa", "8af5531"},
-		{"/c/nothex", getCaptchaVersion},
-		{"", getCaptchaVersion},
-	}
-	for _, c := range cases {
-		if got := locationVersion(c.in); got != c.want {
-			t.Errorf("locationVersion(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-// writeTestBody writes b from an httptest handler; a write failure cannot
-// fail the test directly, so it is reported and the handler continues.
-func writeTestBody(t *testing.T, w http.ResponseWriter, b []byte) {
-	t.Helper()
-	if _, err := w.Write(b); err != nil {
-		t.Errorf("write test response: %v", err)
-	}
-}
-
-// TestCaptchaAttemptsEncGate verifies the features.enc_get_req fast path: when
-// the site declares encrypted-only getcaptcha, CaptchaAttempts skips the
-// checksiteconfig challenge solve and the plaintext variants entirely,
-// submitting the speculatively claimed challenge over the encrypted wire as
-// the single attempt.
-func TestCaptchaAttemptsEncGate(t *testing.T) {
-	const tok = "P1_eyJlbmNnYXRlLnRva2VuIn0.offline"
-	claimJWT := fakeJWT(t, "/c/enc-gate-loc")
-	_, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
-		// The speculative claim (no n, no c) returns a challenge spec.
-		if params["n"] == "" && params["c"] == "" {
-			return 200, []byte(`{"c":{"type":"hsw","req":"` + claimJWT + `"}}`), nil
-		}
-		// No plaintext variant may be reached on the enc fast path.
-		t.Errorf("plaintext variant reached on enc fast path: %v", params)
-		return 200, []byte(`{"pass":false}`), nil
-	})
-	defer cleanup()
-
-	// Declare the site encrypted-only.
-	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, bool, error) {
-		return "", "", "", true, nil
-	}
-
-	oldOctet := postGetCaptchaOctetFn
-	defer func() { postGetCaptchaOctetFn = oldOctet }()
-	postGetCaptchaOctetFn = func(ctx context.Context, sitekey string, body []byte) (int, []byte, error) {
-		resp := msgpackEncodeMapString(map[string]string{"pass": "true"})
-		return 200, appendMsgpackKV(resp, "generated_pass_UUID", tok), nil
-	}
-
-	solve, attempts, err := CaptchaAttempts(context.Background(), "sitekey", "host")
-	if err != nil {
-		t.Fatalf("CaptchaAttempts (enc gate): %v", err)
-	}
-	if len(attempts) != 1 {
-		t.Fatalf("attempts = %d, want 1 (enc fast path skips variants)", len(attempts))
-	}
-	if attempts[0].Name != "encrypted-claim" {
-		t.Errorf("attempt name = %q, want encrypted-claim", attempts[0].Name)
-	}
-	if attempts[0].Token != tok {
-		t.Errorf("attempt token = %q, want %q", attempts[0].Token, tok)
-	}
-	if solve.JWT != claimJWT {
-		t.Errorf("solve.JWT = %q, want the claimed JWT", solve.JWT)
-	}
-	if solve.N == "" {
-		t.Error("solve.N empty, want the solved n")
-	}
-}
-
-// encReissueEnv installs the encrypted-only offline environment the re-issue
-// tests share: the speculative/phase-A claim answers with claimJWT; the
-// plaintext variants must never be reached.
-func encReissueEnv(t *testing.T, claimJWT string) (cleanup func()) {
-	t.Helper()
-	_, _, cleanup = offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
-		if params["n"] == "" && params["c"] == "" {
-			return 200, []byte(`{"c":{"type":"hsw","req":"` + claimJWT + `"}}`), nil
-		}
-		t.Errorf("plaintext variant reached on enc fast path: %v", params)
-		return 200, []byte(`{"pass":false}`), nil
-	})
-	fetchChecksite = func(ctx context.Context, sitekey, host string) (string, string, string, bool, error) {
-		return "", "", "", true, nil
-	}
-	return cleanup
-}
-
-// wireSpecJWT decodes the [spec, cipher] wire body and returns the spec's
-// challenge jwt, failing the octet fake when the wire is malformed.
-func wireSpecJWT(body []byte) (string, error) {
-	v, rest, err := msgpackDecode(body)
-	if err != nil {
-		return "", err
-	}
-	arr, ok := v.([]any)
-	if !ok || len(arr) != 2 || len(rest) != 0 {
-		return "", errors.New("wire is not [spec, cipher]")
-	}
-	spec, ok := arr[0].(string)
-	if !ok {
-		return "", errors.New("wire spec is not a string")
-	}
-	var doc struct {
-		Req string `json:"req"`
-	}
-	if err := json.Unmarshal([]byte(spec), &doc); err != nil || doc.Req == "" {
-		return "", fmt.Errorf("wire spec %s carries no req", spec)
-	}
-	return doc.Req, nil
-}
-
-// encryptedPasscodeBody builds the wasm-answer shape the decrypt path
-// expects: a msgpack map carrying the passcode.
-func encryptedPasscodeBody(tok string) []byte {
-	resp := msgpackEncodeMapString(map[string]string{"pass": "true"})
-	return appendMsgpackKV(resp, "generated_pass_UUID", tok)
-}
-
-// TestCaptchaTokenEncryptedReissueLoop verifies the re-issued-challenge
-// ladder: a submission answered with a fresh hsw challenge (the server
-// rejecting the proof — datacenter exits hit this when the assigned bundle
-// variant rotates under them) must be re-solved with the new challenge's own
-// bundle and resubmitted, yielding the passcode on the second round.
-func TestCaptchaTokenEncryptedReissueLoop(t *testing.T) {
-	const tok = "P1_eyJyZWlzc3VlLnRva2VuIn0.offline"
-	jwt1 := fakeJWT(t, "/c/enc-reissue-loc-1")
-	jwt2 := fakeJWT(t, "/c/enc-reissue-loc-2")
-	cleanup := encReissueEnv(t, jwt1)
-	defer cleanup()
-
-	oldOctet := postGetCaptchaOctetFn
-	defer func() { postGetCaptchaOctetFn = oldOctet }()
-	calls := 0
-	postGetCaptchaOctetFn = func(ctx context.Context, sitekey string, body []byte) (int, []byte, error) {
-		calls++
-		gotJWT, err := wireSpecJWT(body)
-		if err != nil {
-			return 0, nil, err
-		}
-		switch calls {
-		case 1:
-			if gotJWT != jwt1 {
-				return 0, nil, fmt.Errorf("round 1 submitted jwt %q, want the claimed one", gotJWT)
-			}
-			// Proof rejected: the server answers with a fresh challenge as
-			// plaintext JSON, exactly like the live datacenter flow.
-			return 200, []byte(`{"c":{"type":"hsw","req":"` + jwt2 + `"}}`), nil
-		case 2:
-			if gotJWT != jwt2 {
-				return 0, nil, fmt.Errorf("round 2 submitted jwt %q, want the re-issued one", gotJWT)
-			}
-			return 200, encryptedPasscodeBody(tok), nil
-		default:
-			return 0, nil, fmt.Errorf("unexpected octet call %d", calls)
-		}
-	}
-
-	solve, attempts, err := CaptchaAttempts(context.Background(), "sitekey", "host")
-	if err != nil {
-		t.Fatalf("CaptchaAttempts (reissue loop): %v", err)
-	}
-	if len(attempts) != 1 {
-		t.Fatalf("attempts = %d, want 1 (the loop stays inside the encrypted attempt)", len(attempts))
-	}
-	if attempts[0].Token != tok {
-		t.Errorf("attempt token = %q, want %q", attempts[0].Token, tok)
-	}
-	if attempts[0].Name != "encrypted-r2" {
-		t.Errorf("attempt name = %q, want encrypted-r2", attempts[0].Name)
-	}
-	if solve.JWT != jwt2 {
-		t.Errorf("solve.JWT = %q, want the re-issued jwt", solve.JWT)
-	}
-	if calls != 2 {
-		t.Errorf("octet calls = %d, want 2", calls)
-	}
-}
-
-// TestCaptchaTokenEncryptedReissueExhausted verifies the ladder's bound: a
-// server that keeps re-issuing challenges must not be followed forever; the
-// attempt fails with a classified error after maxEncryptedRounds.
-func TestCaptchaTokenEncryptedReissueExhausted(t *testing.T) {
-	jwts := []string{
-		fakeJWT(t, "/c/enc-exhaust-loc-1"),
-		fakeJWT(t, "/c/enc-exhaust-loc-2"),
-		fakeJWT(t, "/c/enc-exhaust-loc-3"),
-	}
-	cleanup := encReissueEnv(t, jwts[0])
-	defer cleanup()
-
-	oldOctet := postGetCaptchaOctetFn
-	defer func() { postGetCaptchaOctetFn = oldOctet }()
-	calls := 0
-	postGetCaptchaOctetFn = func(ctx context.Context, sitekey string, body []byte) (int, []byte, error) {
-		defer func() { calls++ }()
-		if calls >= len(jwts) {
-			return 200, []byte(`{"c":{"type":"hsw","req":"` + jwts[len(jwts)-1] + `"}}`), nil
-		}
-		return 200, []byte(`{"c":{"type":"hsw","req":"` + jwts[calls] + `"}}`), nil
-	}
-
-	_, attempts, err := CaptchaAttempts(context.Background(), "sitekey", "host")
-	if err != nil {
-		t.Fatalf("CaptchaAttempts (exhausted): %v", err)
-	}
-	if len(attempts) != 1 {
-		t.Fatalf("attempts = %d, want 1", len(attempts))
-	}
-	if attempts[0].Err == nil ||
-		!strings.Contains(attempts[0].Err.Error(), "re-issued a fresh challenge") {
-		t.Errorf("attempt err = %v, want re-issue exhaustion message", attempts[0].Err)
-	}
-	if calls != maxEncryptedRounds {
-		t.Errorf("octet calls = %d, want %d", calls, maxEncryptedRounds)
-	}
-	if attempts[0].Name != fmt.Sprintf("encrypted-r%d", maxEncryptedRounds) {
-		t.Errorf("attempt name = %q, want encrypted-r%d", attempts[0].Name, maxEncryptedRounds)
-	}
-}
-
-// TestCaptchaTokenEncryptedReissueNonHsw verifies the classified stop: when
-// the re-issued challenge is not a PoW (an image task), the loop must stop
-// instead of trying to solve a different challenge kind.
-func TestCaptchaTokenEncryptedReissueNonHsw(t *testing.T) {
-	jwt1 := fakeJWT(t, "/c/enc-nonhsw-loc")
-	cleanup := encReissueEnv(t, jwt1)
-	defer cleanup()
-
-	oldOctet := postGetCaptchaOctetFn
-	defer func() { postGetCaptchaOctetFn = oldOctet }()
-	calls := 0
-	postGetCaptchaOctetFn = func(ctx context.Context, sitekey string, body []byte) (int, []byte, error) {
-		calls++
-		return 200, []byte(`{"c":{"type":"getImage","req":"` + jwt1 + `"}}`), nil
-	}
-
-	_, attempts, err := CaptchaAttempts(context.Background(), "sitekey", "host")
-	if err != nil {
-		t.Fatalf("CaptchaAttempts (non-hsw): %v", err)
-	}
-	if len(attempts) != 1 {
-		t.Fatalf("attempts = %d, want 1", len(attempts))
-	}
-	if attempts[0].Err == nil ||
-		!strings.Contains(attempts[0].Err.Error(), "getImage") ||
-		!strings.Contains(attempts[0].Err.Error(), "re-issued") {
-		t.Errorf("attempt err = %v, want a re-issued \"getImage\" classification", attempts[0].Err)
-	}
-	if calls != 1 {
-		t.Errorf("octet calls = %d, want 1 (loop must stop at the non-hsw re-issue)", calls)
-	}
-}
-
-// TestCaptchaTokenRotatesConnectionsOnFailure verifies the failure-rotation
-// contract: an extraction that yields no passcode must close the pipeline's
-// idle connections (so the next attempt dials a fresh proxy exit), while a
-// successful extraction must keep them warm.
-func TestCaptchaTokenRotatesConnectionsOnFailure(t *testing.T) {
+func TestMintRotatesConnectionsOnFailure(t *testing.T) {
 	oldReset := resetConns
 	defer func() { resetConns = oldReset }()
 	rotated := 0
 	resetConns = func() { rotated++ }
 
-	// Failure path: no passcode from any variant.
-	_, _, cleanup := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
-		return http.StatusBadRequest, []byte(`{"pass":false}`), nil
+	_, cleanup := mintEnv(t, "", func(ctx context.Context, sitekey string, body []byte) (mintPost, error) {
+		return mintPost{Status: 400, CType: "application/json", Body: []byte(`{"pass":false}`)}, nil
 	})
 	defer cleanup()
-	_, err := CaptchaToken(context.Background(), "sitekey", "host")
-	if err == nil {
-		t.Fatal("CaptchaToken succeeded, want failure")
+	if _, err := CaptchaToken(context.Background(), "sitekey", "host"); err == nil {
+		t.Fatal("want failure")
 	}
 	if rotated != 1 {
-		t.Errorf("rotations after failure = %d, want 1", rotated)
+		t.Fatalf("rotations after failure = %d, want 1", rotated)
 	}
 
-	// Success path: connection stays warm.
-	_, _, cleanup2 := offlineCaptchaEnv(t, func(ctx context.Context, params map[string]string) (int, []byte, error) {
-		return 200, []byte(`{"pass":true,"generated_pass_UUID":"P1_eyJ3YXJtLmNvbm4ifQ.offline"}`), nil
-	})
-	defer cleanup2()
 	rotated = 0
-	tok, err := CaptchaToken(context.Background(), "sitekey", "host")
-	if err != nil {
-		t.Fatalf("CaptchaToken (success path): %v", err)
+	postMint = func(ctx context.Context, sitekey string, body []byte) (mintPost, error) {
+		return mintPost{Status: 200, CType: "application/octet-stream", Body: passBody("P1_eyJ3YXJtLmNvbm4ifQ.offline")}, nil
 	}
-	if tok == "" {
-		t.Fatal("CaptchaToken returned empty token on success")
+	tok, err := CaptchaToken(context.Background(), "sitekey", "host")
+	if err != nil || tok == "" {
+		t.Fatalf("success path: token=%q err=%v", tok, err)
 	}
 	if rotated != 0 {
-		t.Errorf("rotations after success = %d, want 0 (a working exit stays warm)", rotated)
+		t.Fatalf("rotations after success = %d, want 0", rotated)
 	}
 
-	// A context-canceled failure is the caller unwinding, not a bad exit:
-	// no rotation.
 	rotated = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = CaptchaToken(ctx, "sitekey", "host")
-	if err == nil {
-		t.Fatal("CaptchaToken succeeded on canceled context, want failure")
+	if _, err := CaptchaToken(ctx, "sitekey", "host"); err == nil {
+		t.Fatal("canceled context should fail")
 	}
 	if rotated != 0 {
-		t.Errorf("rotations after context cancel = %d, want 0", rotated)
+		t.Fatalf("rotations after cancel = %d, want 0", rotated)
+	}
+}
+
+func TestFetchMintChallengePreservesSpec(t *testing.T) {
+	pinVersion(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Query().Get("hl") != "" {
+			t.Errorf("hl = %q, want absent", r.URL.Query().Get("hl"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"c":{"type":"hsw","req":"a.b.c","extra":1},"l":"/c/x"}`))
+	}))
+	defer srv.Close()
+	old := checksiteBase
+	checksiteBase = srv.URL
+	defer func() { checksiteBase = old }()
+
+	ch, err := fetchMintChallengeLive(context.Background(), "sk", "build.nvidia.com")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if ch.SpecJSON != `{"type":"hsw","req":"a.b.c","extra":1}` {
+		t.Fatalf("spec = %s", ch.SpecJSON)
+	}
+	if ch.Location != "/c/x" {
+		t.Fatalf("location = %q", ch.Location)
+	}
+	if !strings.Contains(gotQuery, "sc=1") || strings.Contains(gotQuery, "hl=") {
+		t.Fatalf("query = %s", gotQuery)
+	}
+}
+
+func TestRequireAssetVersionFailsClosed(t *testing.T) {
+	oldV, oldT := versionValue, versionFetched
+	versionValue, versionFetched = "", time.Time{}
+	defer func() { versionValue, versionFetched = oldV, oldT }()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	oldURL := assetAPIVersionURL
+	assetAPIVersionURL = srv.URL
+	defer func() { assetAPIVersionURL = oldURL }()
+
+	if _, err := RequireAssetVersion(context.Background()); err == nil {
+		t.Fatal("want error when api.js scrape fails")
+	}
+}
+
+func TestSolverCacheReusesSolver(t *testing.T) {
+	pinVersion(t, "cccccccccccccccccccccccccccccccccccccccc")
+	oldFetch, oldLoad, oldPost := fetchMintChallenge, loadMintBundle, postMint
+	defer func() {
+		fetchMintChallenge, loadMintBundle, postMint = oldFetch, oldLoad, oldPost
+		CloseSolvers()
+	}()
+	const loc = "/c/282d0ff"
+	jwt := fakeJWT(t, loc)
+	fetchMintChallenge = func(ctx context.Context, sitekey, host string) (mintChallenge, error) {
+		return mintChallenge{SpecJSON: `{"type":"hsw","req":"` + jwt + `"}`, JWT: jwt, Location: loc, Name: "hsw"}, nil
+	}
+	loads := 0
+	loadMintBundle = func(ctx context.Context, assetURL, referer, sri string) (*hsw.Solver, error) {
+		loads++
+		b, err := hsw.Prepare([]byte(fakeV1Body))
+		if err != nil {
+			return nil, err
+		}
+		return hsw.New(b)
+	}
+	const tok = "P1_offline.cache-test"
+	postMint = func(ctx context.Context, sitekey string, body []byte) (mintPost, error) {
+		return mintPost{Status: 200, CType: "application/octet-stream", Body: passBody(tok)}, nil
+	}
+	ctx := context.Background()
+	if got, err := CaptchaToken(ctx, "sitekey", "host"); err != nil || got != tok {
+		t.Fatalf("first = %q err=%v", got, err)
+	}
+	if loads != 1 {
+		t.Fatalf("loads after first = %d, want 1", loads)
+	}
+	if got, err := CaptchaToken(ctx, "sitekey", "host"); err != nil || got != tok {
+		t.Fatalf("second = %q err=%v", got, err)
+	}
+	if loads != 1 {
+		t.Fatalf("loads after second = %d, want 1", loads)
+	}
+}
+
+func TestParseMintChallengeCompactsWhitespace(t *testing.T) {
+	ch, err := parseMintChallenge([]byte("{\n  \"c\": { \"type\" : \"hsw\", \"req\" : \"a.b.c\" }, \"l\": \"/c/z\"\n}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch.SpecJSON != `{"type":"hsw","req":"a.b.c"}` {
+		t.Fatalf("spec = %s", ch.SpecJSON)
+	}
+	var probe map[string]any
+	if err := json.Unmarshal([]byte(ch.SpecJSON), &probe); err != nil {
+		t.Fatal(err)
 	}
 }

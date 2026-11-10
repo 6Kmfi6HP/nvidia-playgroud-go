@@ -115,6 +115,25 @@ func TestSolveLocal(t *testing.T) {
 	}
 }
 
+func TestSolveRequestPassesOptionsObject(t *testing.T) {
+	raw := `window.hsw = function(vv, aSj) {
+  return Promise.resolve(JSON.stringify(aSj));
+};`
+	b := mustPrepare(t, raw)
+	s, err := New(b)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+	got, err := s.SolveRequest(context.Background(), "jwt.abc", "https://build.nvidia.com/")
+	if err != nil {
+		t.Fatalf("SolveRequest: %v", err)
+	}
+	if want := `{"href":"https://build.nvidia.com/","ardata":null}`; got != want {
+		t.Fatalf("SolveRequest = %q, want %q", got, want)
+	}
+}
+
 // TestAtobBinary verifies atob returns a true binary string (charCodeAt ==
 // byte): the regression that broke v1 wasm assembly when v8go mangled bytes
 // >= 0x80 through UTF-8 conversion.
